@@ -49,6 +49,7 @@
   .bot .bubble { background: var(--canvas-soft); border: 1px solid var(--hairline); color: var(--on-mute); border-bottom-left-radius: 6px; }
   .bot .bubble.err { background: var(--canvas-soft); color: var(--danger); border-color: rgba(255,90,90,.45); }
   .cite { font-size: 11px; vertical-align: super; color: var(--on); cursor: help; margin: 0 1px; font-weight: 700; letter-spacing: .5px; }
+  .usedsrc { font-size: 11px; color: var(--ink-faint); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .7px; line-height: 1.5; }
   .sources { margin-top: 8px; font-size: 11px; color: var(--on-mute); }
   .srcrow { border-top: 1px solid var(--hairline); }
   .srchead { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 6px 0; cursor: pointer; }
@@ -471,11 +472,12 @@ function addUser(text){
 // Builds a streaming bot bubble; returns handlers to feed it incrementally.
 function newBotBubble(){
   const wrap = document.createElement('div'); wrap.className='msg bot';
+  const usedBox = document.createElement('div'); usedBox.className='usedsrc'; usedBox.style.display='none';
   const bubble = document.createElement('div'); bubble.className='bubble cursor';
   const srcBox = document.createElement('div'); srcBox.className='sources'; srcBox.style.display='none';
   const noteBtn = document.createElement('button');
   noteBtn.type='button'; noteBtn.className='notebtn'; noteBtn.textContent='📌 노트 저장'; noteBtn.style.display='none';
-  wrap.appendChild(bubble); wrap.appendChild(srcBox); wrap.appendChild(noteBtn);
+  wrap.appendChild(usedBox); wrap.appendChild(bubble); wrap.appendChild(srcBox); wrap.appendChild(noteBtn);
   log.appendChild(wrap); log.scrollTop = log.scrollHeight;
   let html = '', n = 0;
   let plain = '', firstCite = null, concepts = [];
@@ -489,6 +491,13 @@ function newBotBubble(){
     if(row){ row.classList.add('open'); row.scrollIntoView({block:'nearest', behavior:'smooth'}); }
   };
   return {
+    // "사용한 소스" — 이 답변이 실제로 읽은 논문 목록 (체크된 소스와 일치)
+    usedSources(titles){
+      if(!titles || !titles.length) return;
+      usedBox.textContent = '사용한 소스: ' + titles.join(' · ');
+      usedBox.title = titles.join('\n');
+      usedBox.style.display = '';
+    },
     text(delta){
       const stick = atBottom();
       plain += delta;
@@ -528,7 +537,8 @@ async function send(){
   try {
     const r = await fetch('/chat', {
       method:'POST', headers: hdr({'Content-Type':'application/json'}),
-      body: JSON.stringify({session_id: getSession(), conversation_id: getConv(), message: text})
+      body: JSON.stringify({session_id: getSession(), conversation_id: getConv(),
+                            message: text, sources: selectedIds()})
     });
     if(!r.ok || !r.body){ bot.error('오류: ' + r.status); return; }
     const reader = r.body.getReader();
@@ -559,6 +569,7 @@ async function send(){
 function handleEvent(ev, bot){
   switch(ev.type){
     case 'session': setSession(ev.session_id); setConv(ev.conversation_id); break;
+    case 'sources': bot.usedSources(ev.titles || []); break;
     case 'text': bot.text(ev.text || ''); break;
     case 'citation': bot.citation(ev.citation || {}); break;
     case 'done':
@@ -593,7 +604,7 @@ async function openQuiz(){
   if(!sid){ alert('조금 더 대화한 뒤에 퀴즈를 볼 수 있어요'); return; }
   const btn = document.getElementById('quizbtn'); btn.disabled = true;
   try {
-    const r = await fetch('/quiz', {method:'POST', headers: hdr({'Content-Type':'application/json'}), body: JSON.stringify({session_id: sid})});
+    const r = await fetch('/quiz', {method:'POST', headers: hdr({'Content-Type':'application/json'}), body: JSON.stringify({session_id: sid, sources: selectedIds()})});
     if(r.status === 400){ alert('조금 더 대화한 뒤에 퀴즈를 볼 수 있어요'); return; }
     if(!r.ok){ alert('퀴즈를 불러오지 못했어요 (' + r.status + ')'); return; }
     currentQuiz = await r.json();

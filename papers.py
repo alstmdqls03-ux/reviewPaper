@@ -37,7 +37,7 @@ def client() -> anthropic.Anthropic:
 def ensure_uploaded(c: anthropic.Anthropic) -> list[dict]:
     """Upload each PDF to the Files API once, cache the file_ids on disk.
 
-    Returns a list of {file_id, title} in corpus order. ponytail: base64 of all
+    Returns a list of {file_id, title, path} in corpus order. ponytail: base64 of all
     5 PDFs is ~47MB, over the 32MB request cap — Files API is the only option.
     """
     cache = json.loads(_CACHE.read_text()) if _CACHE.exists() else {}
@@ -52,7 +52,7 @@ def ensure_uploaded(c: anthropic.Anthropic) -> list[dict]:
             cache[path] = fid
             _CACHE.write_text(json.dumps(cache, indent=2))
             print(f"uploaded {path} -> {fid}")
-        out.append({"file_id": fid, "title": title})
+        out.append({"file_id": fid, "title": title, "path": path})
     return out
 
 

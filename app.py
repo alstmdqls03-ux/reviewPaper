@@ -117,21 +117,43 @@ def learner(x_device_id: str | None) -> str:
     return ACCOUNTS.resolve(dev(x_device_id))
 
 
-def _doc_blocks_for(query: str, citations: bool, cache_last: bool) -> list:
-    if not _uploaded:
-        return []
-    sel = corpus.select_documents(query, _uploaded)
-    return papers.document_blocks(sel, citations=citations, cache_last=cache_last)
+def _pick_sources(sources: list[str] | None) -> tuple[list[dict], list[str]]:
+    """(uploaded docs to send, their titles) for a selection of source ids.
+    None/empty selection = the whole registry. Titles come from the registry so the
+    'used sources' line is honest even in MOCK mode, where nothing is uploaded."""
+    reg = corpus.load_corpus()
+    want = set(sources) if sources else None
+    picked = [e for e in reg if want is None or e["id"] in want] or reg
+    paths = {e["path"] for e in picked}
+    return [u for u in _uploaded if u.get("path") in paths], [e["title"] for e in picked]
+
+
+def _doc_blocks_for(query: str, citations: bool, cache_last: bool,
+                    sources: list[str] | None = None) -> tuple[list, list[str]]:
+    docs, titles = _pick_sources(sources)
+    if not docs:
+        return [], titles
+    if sources:
+        # Explicit selection wins: send exactly what the user checked, in registry order.
+        # ponytail: this also keeps the prompt prefix byte-stable across questions, so the
+        # 1h cache actually READS instead of re-writing at 2x. BM25 reordering broke that.
+        sel = docs
+    else:
+        sel = corpus.select_documents(query, docs)
+        titles = [d["title"] for d in sel]
+    return papers.document_blocks(sel, citations=citations, cache_last=cache_last), titles
 
 
 class ChatIn(BaseModel):
     session_id: str | None = None
     conversation_id: str | None = None
     message: str
+    sources: list[str] | None = None  # selected source ids; None = all
 
 
 class QuizIn(BaseModel):
     session_id: str
+    sources: list[str] | None = None
 
 
 class GradeIn(BaseModel):
@@ -194,12 +216,15 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                 sess.covered_concepts |= set(match_concepts(m["content"], NODES))
     _conv_of[sess.id] = conv_id
 
+    doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
+                                              sources=body.sources)
+
     async def gen():
         yield _sse({"type": "session", "session_id": sess.id, "conversation_id": conv_id})
+        yield _sse({"type": "sources", "titles": used_titles})
         parts, citations = [], []
         async with sess.lock:
             try:
-                doc_blocks = _doc_blocks_for(message, citations=True, cache_last=True)
                 messages = _build_messages(sess, doc_blocks, message)
                 async for kind, payload in llm.stream_chat(messages, SYSTEM):
                     if kind == "text":
@@ -237,7 +262,10 @@ async def quiz(body: QuizIn, x_device_id: str = Header(None)):
     order = MASTERY.due_concepts(device, covered)  # spaced repetition: weak/due first
     covered.sort(key=lambda c: order.index(c) if c in order else len(order))
     infos = [NODE_BY_ID[cid] for cid in covered]
-    quiz_docs = papers.document_blocks(_uploaded, citations=False, cache_last=True) if _uploaded else []
+    # Same source selection as chat. Was: the ENTIRE corpus — 11 papers blows past the
+    # 1M context window on a real key, and rewrote the cache prefix every quiz.
+    quiz_docs, _ = _doc_blocks_for(" ".join(c["label"] for c in infos),
+                                   citations=False, cache_last=True, sources=body.sources)
     async with sess.lock:
         questions = await llm.make_quiz(quiz_docs, infos)
     quiz_id = sess.add_quiz(questions)
