@@ -8,6 +8,12 @@ Secrets (APP_SECRET, ADMIN_TOKEN) are NEVER exposed by summary().
 """
 import os
 
+from dotenv import load_dotenv
+
+# Load .env HERE, not in whichever module happens to be imported first — otherwise
+# MOCK's answer depends on import order (papers.py used to be the only loader).
+load_dotenv()
+
 
 class Settings:
     def __init__(self):
@@ -18,7 +24,9 @@ class Settings:
         self.MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "4000"))
         self.MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
         self.MAX_SOURCES = int(os.getenv("MAX_SOURCES", "50"))    # per user, own uploads only
-        self.MOCK = os.getenv("MOCK_LLM") == "1"
+        # Mock when explicitly asked OR when there is no key to call with. llm.MOCK reads
+        # this exact value, so /healthz can't claim "mock: false" while answers are canned.
+        self.MOCK = os.getenv("MOCK_LLM") == "1" or not os.getenv("ANTHROPIC_API_KEY")
         self.APP_SECRET = os.getenv("APP_SECRET", "dev-only-insecure-change-me")
         self.ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # empty => admin open in dev
 
@@ -47,13 +55,26 @@ settings = Settings()
 if __name__ == "__main__":
     # defaults load — isolate from ambient env (e.g. MOCK_LLM=1 in the shell)
     for _k in ("MODEL", "SESSION_TTL", "RATE_LIMIT", "RATE_WINDOW", "MAX_SOURCES",
-               "MAX_MESSAGE_CHARS", "MAX_UPLOAD_MB", "MOCK_LLM", "ADMIN_TOKEN"):
+               "MAX_MESSAGE_CHARS", "MAX_UPLOAD_MB", "MOCK_LLM", "ADMIN_TOKEN",
+               "ANTHROPIC_API_KEY"):
         os.environ.pop(_k, None)
     s = Settings()
     assert s.MODEL == "claude-opus-4-8"
     assert s.SESSION_TTL == 1800 and s.RATE_LIMIT == 30 and s.RATE_WINDOW == 60
     assert s.MAX_MESSAGE_CHARS == 4000 and s.MAX_UPLOAD_MB == 50 and s.MAX_SOURCES == 50
-    assert s.MOCK is False and s.ADMIN_TOKEN == ""
+    assert s.ADMIN_TOKEN == ""
+
+    # MOCK: no key -> mock even without MOCK_LLM; a key -> real; MOCK_LLM=1 forces mock.
+    assert s.MOCK is True, "keyless must be mock — otherwise /healthz lies"
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-not-a-real-key"
+    assert Settings().MOCK is False
+    os.environ["MOCK_LLM"] = "1"
+    assert Settings().MOCK is True, "MOCK_LLM=1 must win even with a key present"
+    os.environ.pop("MOCK_LLM")
+    # llm.py must not carry its own copy of the rule
+    import pathlib
+    _llm = pathlib.Path("llm.py").read_text()
+    assert 'MOCK = settings.MOCK' in _llm, "llm.py re-derives MOCK — the two will drift"
 
     # env override works on re-instantiation
     os.environ["RATE_LIMIT"] = "5"

@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 
 import papers
+from config import settings
 
-MOCK = os.getenv("MOCK_LLM") == "1" or not os.getenv("ANTHROPIC_API_KEY")
+MOCK = settings.MOCK  # single definition lives in config.py; /healthz reports the same bool
 
 QUIZ_SCHEMA = {
     "type": "object",
