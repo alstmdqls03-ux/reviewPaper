@@ -375,7 +375,9 @@ async def conversations(x_device_id: str = Header(None)):
 
 @app.get("/conversations/{conv_id}")
 async def conversation_messages(conv_id: str):
-    return {"messages": HIST.get_messages(conv_id)}
+    # title travels with the messages so a deep link (/#/chat/{id}) can label the header
+    # without first loading the whole conversation list.
+    return {"messages": HIST.get_messages(conv_id), "title": HIST.get_title(conv_id)}
 
 
 @app.delete("/conversations/{conv_id}")

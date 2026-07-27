@@ -98,6 +98,13 @@ class History:
             )
         ]
 
+    def get_title(self, conv_id):
+        """The conversation's title, or "" if it has none / doesn't exist."""
+        row = self.db.execute(
+            "SELECT title FROM conversations WHERE id=?", (conv_id,)
+        ).fetchone()
+        return (row["title"] if row else "") or ""
+
     def rename(self, conv_id, title):
         self.db.execute(
             "UPDATE conversations SET title=? WHERE id=?", (title, conv_id)
@@ -131,6 +138,9 @@ if __name__ == "__main__":
 
     msgs = h.get_messages(conv)
     assert [m["role"] for m in msgs] == ["user", "assistant"], msgs
+
+    assert h.get_title(conv) == lst[0]["title"], h.get_title(conv)
+    assert h.get_title("no-such-conversation") == ""
 
     # isolation: another user sees nothing
     assert h.list_conversations("userB") == []

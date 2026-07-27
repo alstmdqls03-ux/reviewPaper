@@ -15,9 +15,13 @@
   :root {
     --canvas:#000; --canvas-soft:#0a0a0a; --surface:#0a0a0a; --hairline:#3a3a3f;
     --on:#fff; --on-mute:#a9a9b2; --ink-faint:#8a8a94; --danger:#ff5a5a;
+    /* 인터랙티브 요소의 보더는 --hairline(구분선용, 1.9:1)이 아니라 이걸 쓴다 — 비텍스트 대비 ≥3:1 */
+    --border:#5a5a5f; --focus:#ffffff;
     --sans:'Inter', -apple-system, 'Arial Narrow', Arial, sans-serif;
     --radius-sm:8px; --radius-md:16px; --radius-pill:32px;
+    --rail:300px; --studio:380px;
   }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: var(--sans); color: var(--on); background: var(--canvas); font-size: 16px; line-height: 1.5; overflow-x: hidden; }
   #app { display: flex; height: 100vh; }
@@ -240,6 +244,24 @@
     #app { flex-direction: column; height: 100vh; }
     #graphtoolbar { top: 8px; right: 8px; }
   }
+  /* --- 다단 레이아웃 ---------------------------------------------------------
+     좁은 화면에서는 지금처럼 탭 하나씩. 넓어지면 같은 DOM을 고정 열로 승격한다:
+     ≥1100px = 소스 레일 + 본문, ≥1500px = 소스 레일 + 본문 + 그래프.
+     열로 승격된 뷰는 탭 버튼을 숨긴다(같은 것을 두 군데서 열 수 있으면 헷갈린다). */
+  @media (min-width: 1100px) {
+    #sources.tabpane { display: flex; flex-direction: column; flex: 0 0 var(--rail);
+                       order: -1; border-right: 1px solid var(--border); }  /* 왼쪽 열로 */
+    #sources .pane-toolbar { flex-wrap: wrap; }
+    #sourcesopen, #srcclose { display: none; }   /* 항상 보이므로 열기/닫기 버튼이 필요 없다 */
+    #sources .railhead { display: block; }
+  }
+  @media (min-width: 1500px) {
+    #graphpane.tabpane { display: flex; order: 1; flex: 0 0 var(--studio);
+                         border-left: 1px solid var(--border); }
+    .tab[data-tab="graph"] { display: none; }
+    #graphlabel { display: none; }   /* 380px 열에서는 안내문이 캔버스를 다 덮는다 */
+  }
+  .railhead { display: none; padding: 14px 20px 0; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; color: var(--on); }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
     .msg { animation: none; }
@@ -275,12 +297,13 @@
 
     <div class="tabwrap">
       <!-- 대화 -->
-      <div class="tabpane active" data-pane="chat">
+      <div class="tabpane active" role="tabpanel" aria-label="대화" data-pane="chat">
         <div id="log"><div class="empty">아래 질문을 눌러보거나 직접 물어보세요.</div></div>
         <div class="suggest" id="suggest"></div>
       </div>
       <!-- 소스 -->
-      <div class="tabpane" data-pane="sources" id="sources">
+      <div class="tabpane" role="tabpanel" aria-label="소스" data-pane="sources" id="sources">
+        <div class="railhead">소스</div>
         <div class="pane-toolbar">
           <span id="srccount" class="srccount"></span>
           <button type="button" class="ghostbtn" id="srcall">전체 선택</button>
@@ -296,14 +319,14 @@
         <div id="sourcesbody"></div>
       </div>
       <!-- 학습 -->
-      <div class="tabpane" data-pane="study" id="study">
+      <div class="tabpane" role="tabpanel" aria-label="학습" data-pane="study" id="study">
         <div id="dashboard"></div>
         <div id="nextup"></div>
         <div id="quizbar"><button id="quizbtn" type="button"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>지금까지 배운 걸로 퀴즈 풀기</button></div>
         <div class="study-hint">개념을 학습할수록 “다음에 공부할 개념”과 퀴즈가 여기에 나타납니다.</div>
       </div>
       <!-- 노트 -->
-      <div class="tabpane" data-pane="notes" id="notes">
+      <div class="tabpane" role="tabpanel" aria-label="노트" data-pane="notes" id="notes">
         <div class="pane-toolbar">
           <button type="button" class="ghostbtn" id="notesexport"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>Markdown 내보내기</button>
           <button type="button" class="ghostbtn" id="notesclose">대화로</button>
@@ -311,7 +334,7 @@
         <div id="notesbody"></div>
       </div>
       <!-- 기록 -->
-      <div class="tabpane" data-pane="history" id="history">
+      <div class="tabpane" role="tabpanel" aria-label="기록" data-pane="history" id="history">
         <div class="pane-toolbar">
           <button type="button" class="ghostbtn" id="historystats"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg>통계</button>
           <button type="button" class="ghostbtn" id="historyclose">대화로</button>
@@ -319,7 +342,7 @@
         <div id="historybody"></div>
       </div>
       <!-- 그래프 -->
-      <div class="tabpane" data-pane="graph" id="graphpane">
+      <div class="tabpane" role="tabpanel" aria-label="그래프" data-pane="graph" id="graphpane">
         <div id="graphtoolbar">
           <button type="button" class="gbtn" id="gfit" title="맞춤 (전체 보기)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>맞춤</button>
           <button type="button" class="gbtn" id="grelayout" title="재배치 (다시 정리)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>재배치</button>
@@ -434,18 +457,75 @@ SUGGESTIONS.forEach(s => {
   suggest.appendChild(el);
 });
 
-// ---- Tabs (primary nav for the chat pane) ----
+// ---- Tabs + hash router (안정 URL: /#/chat, /#/chat/{conv_id}, /#/graph/{concept} …) ----
+const ROUTES = ['chat', 'sources', 'graph', 'study', 'notes', 'history'];
+let RENDERED_CONV = null;  // 지금 채팅 로그에 그려져 있는 conversation_id (없으면 null)
+
+// 화면이 넓어서 고정 열로 승격된 뷰는 목적지가 아니다 — 이미 항상 보이므로 chat으로 보낸다.
+function isRail(name){
+  if(name === 'sources') return matchMedia('(min-width: 1100px)').matches;
+  if(name === 'graph')   return matchMedia('(min-width: 1500px)').matches;
+  return false;
+}
+
 function showTab(name){
-  document.querySelectorAll('#chat .tab').forEach(t => { const on = t.dataset.tab === name; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  document.querySelectorAll('#chat .tab').forEach(t => {
+    const on = t.dataset.tab === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    if(on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
+  });
   document.querySelectorAll('#chat .tabpane').forEach(p => p.classList.toggle('active', p.dataset.pane === name));
   document.getElementById('f').style.display = name === 'chat' ? 'flex' : 'none'; // input only on 대화
   if(name === 'study'){ const st = document.querySelector('.tab[data-tab="study"]'); if(st) st.classList.remove('hasdot'); }
   // Cytoscape was hidden (display:none → 0px); resize + reframe once its pane is visible.
   if(name === 'graph' && cy){ cy.resize(); runPhysics(true); }
 }
-document.querySelector('.tab[data-tab="chat"]').onclick = () => showTab('chat');
-document.querySelector('.tab[data-tab="graph"]').onclick = () => showTab('graph');
-document.querySelector('.tab[data-tab="study"]').onclick = () => showTab('study');
+
+function parseHash(){
+  const raw = (location.hash || '').replace(/^#\/?/, '');
+  const [name, ...rest] = raw.split('/');
+  return { name: ROUTES.includes(name) ? name : 'chat', arg: rest.length ? decodeURIComponent(rest.join('/')) : '' };
+}
+
+// 뷰 이동은 전부 여기로. hash를 바꾸면 hashchange -> applyRoute가 실제 렌더를 한다
+// (뒤로가기가 그냥 동작하고, 새로고침해도 같은 화면이 나온다).
+let routing = false;
+function navigate(name, arg){
+  if(isRail(name)) name = 'chat';
+  const want = '#/' + name + (arg ? '/' + encodeURIComponent(arg) : '');
+  if(location.hash === want) applyRoute(); else location.hash = want;
+}
+
+function applyRoute(){
+  if(routing) return;
+  routing = true;
+  try {
+    let { name, arg } = parseHash();
+    if(isRail(name)){ name = 'chat'; arg = ''; }
+    showTab(name);
+    if(name === 'sources'){ SRC_ERROR = ''; loadSources(); }
+    else if(name === 'notes') openNotes();
+    else if(name === 'history') loadConversations();
+    else if(name === 'graph' && arg) focusConcept(arg);
+    // RENDERED_CONV = 지금 로그에 실제로 그려져 있는 대화. localStorage로 판정하면
+    // 새로고침 직후(저장값은 있는데 로그는 비어 있는 상태)에 재생을 건너뛴다.
+    else if(name === 'chat' && arg && arg !== RENDERED_CONV) resumeConversation(arg);
+    else if(name === 'chat' && !arg && getConv() && !RENDERED_CONV) navigate('chat', getConv());
+  } finally { routing = false; }
+}
+window.addEventListener('hashchange', applyRoute);
+
+document.querySelector('.tab[data-tab="chat"]').onclick = () => navigate('chat', getConv() || '');
+document.querySelector('.tab[data-tab="graph"]').onclick = () => navigate('graph');
+document.querySelector('.tab[data-tab="study"]').onclick = () => navigate('study');
+
+// 레일로 승격/강등될 때 그래프 캔버스 크기를 다시 잡아준다.
+let resizeT = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => { if(cy) cy.resize(); if(isRail(parseHash().name)) applyRoute(); }, 200);
+});
 
 // ---- Graph toolbar: 맞춤 / 재배치 / 모두 닫기, and concept-panel 접기/펴기 ----
 function fitGraph(){ if(cy && cy.nodes().length) cy.animate({ fit:{ eles:cy.nodes(), padding:70 } }, { duration:300 }); }
@@ -590,7 +670,15 @@ async function send(){
 
 function handleEvent(ev, bot){
   switch(ev.type){
-    case 'session': setSession(ev.session_id); setConv(ev.conversation_id); break;
+    case 'session': {
+      setSession(ev.session_id); setConv(ev.conversation_id);
+      RENDERED_CONV = ev.conversation_id;
+      // 첫 메시지로 대화가 생기면 URL도 그 대화를 가리키게 한다 (replaceState:
+      // 스트리밍 중에 뒤로가기 히스토리를 더럽히지 않으려고).
+      const want = '#/chat/' + encodeURIComponent(ev.conversation_id);
+      if(location.hash !== want) history.replaceState(null, '', want);
+      break;
+    }
     case 'sources': bot.usedSources(ev.titles || []); break;
     case 'text': bot.text(ev.text || ''); break;
     case 'citation': bot.citation(ev.citation || {}); break;
@@ -619,7 +707,7 @@ document.getElementById('quizbtn').onclick = openQuiz;
 document.getElementById('quizclose').onclick = closeQuiz;
 document.getElementById('quizsubmit').onclick = gradeQuiz;
 
-function closeQuiz(){ quizEl.classList.remove('open'); showTab('chat'); }
+function closeQuiz(){ quizEl.classList.remove('open'); navigate('chat', getConv() || ''); }
 
 async function openQuiz(){
   const sid = getSession();
@@ -1125,8 +1213,8 @@ async function errText(r, fallback){
   return `${fallback} (${r.status})`;
 }
 
-document.getElementById('sourcesopen').onclick = () => { SRC_ERROR=''; showTab('sources'); loadSources(); };
-document.getElementById('srcclose').onclick = () => showTab('chat');
+document.getElementById('sourcesopen').onclick = () => navigate('sources');
+document.getElementById('srcclose').onclick = () => navigate('chat', getConv() || '');
 document.getElementById('srcadd').onclick = () => { document.getElementById('uploadopen').click(); };
 document.getElementById('srcall').onclick = () => { setSelected(SOURCES.map(s=>s.id)); renderSources(); };
 document.getElementById('srcnone').onclick = () => { setSelected([]); renderSources(); };
@@ -1148,8 +1236,8 @@ async function saveNote(text, source, concept_id, btn){
 }
 
 const notesEl = document.getElementById('notes');
-document.getElementById('notesopen').onclick = openNotes;
-document.getElementById('notesclose').onclick = () => showTab('chat');
+document.getElementById('notesopen').onclick = () => navigate('notes');
+document.getElementById('notesclose').onclick = () => navigate('chat', getConv() || '');
 document.getElementById('notesexport').onclick = exportNotes;
 
 async function openNotes(){
@@ -1290,8 +1378,8 @@ loadAccount();
 
 // ---- Conversation history ----
 const historyEl = document.getElementById('history');
-document.getElementById('historyopen').onclick = openHistory;
-document.getElementById('historyclose').onclick = () => showTab('chat');
+document.getElementById('historyopen').onclick = () => navigate('history');
+document.getElementById('historyclose').onclick = () => navigate('chat', getConv() || '');
 document.getElementById('newconv').onclick = newConversation;
 
 function shortTime(s){
@@ -1323,11 +1411,12 @@ function resetChat(){
   log.innerHTML = ONBOARD;
   suggest.style.display = '';
   document.getElementById('quizbar').style.display = 'none';
+  RENDERED_CONV = null;
   setConvTitle(NEW_CONV_TITLE);
   highlightConcepts([]);
 }
 
-function newConversation(){ resetChat(); showTab('chat'); }
+function newConversation(){ resetChat(); navigate('chat'); }
 
 async function openHistory(){
   showTab('history');
@@ -1368,7 +1457,8 @@ async function resumeConversation(id, title){
     const d = await r.json();
     localStorage.setItem('rp_conv', id);
     localStorage.removeItem('rp_session');
-    setConvTitle(title);
+    RENDERED_CONV = id;
+    setConvTitle(title || d.title);  // 딥링크로 들어오면 목록을 안 거치므로 서버 제목을 쓴다
     log.innerHTML = '';
     (d.messages || []).forEach(m => {
       if(m.role === 'user') addUser(m.content || '');
@@ -1376,7 +1466,7 @@ async function resumeConversation(id, title){
     });
     if(!(d.messages || []).length) log.innerHTML = '<div class="empty">빈 대화입니다.</div>';
     document.getElementById('quizbar').style.display = 'none';
-    showTab('chat');
+    navigate('chat', id);   // 대화는 URL로 딥링크된다: /#/chat/{conversation_id}
   } catch(e){ toast('대화를 불러오지 못했어요'); }
 }
 
@@ -1425,6 +1515,9 @@ async function openStats(){
       (cohort ? `<div class="nu-title">코호트 상위 개념</div>${cohort}` : '');
   } catch(e){ body.innerHTML = '<div class="empty">통계를 불러오지 못했어요.</div>'; }
 }
+
+// 첫 로드에서 URL의 뷰를 그대로 연다 (새로고침해도 같은 화면).
+applyRoute();
 
 // ---- Metrics (unobtrusive observability footer) ----
 fetch('/metrics').then(r => r.ok ? r.json() : null).then(m => {
