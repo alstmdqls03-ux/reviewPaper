@@ -117,11 +117,16 @@ def learner(x_device_id: str | None) -> str:
     return ACCOUNTS.resolve(dev(x_device_id))
 
 
-def _pick_sources(sources: list[str] | None) -> tuple[list[dict], list[str]]:
+def _pick_sources(sources: list[str] | None,
+                  user_id: str | None = None) -> tuple[list[dict], list[str]]:
     """(uploaded docs to send, their titles) for a selection of source ids.
-    None/empty selection = the whole registry. Titles come from the registry so the
-    'used sources' line is honest even in MOCK mode, where nothing is uploaded."""
-    reg = corpus.load_corpus()
+
+    Scoped to what `user_id` may see (shared papers + their own uploads), so a
+    selection can never reach into someone else's PDF even if its id is guessed.
+    None/empty selection = everything visible. Titles come from the registry so the
+    'used sources' line is honest even in MOCK mode, where nothing is uploaded.
+    """
+    reg = corpus.visible_corpus(user_id)
     want = set(sources) if sources else None
     picked = [e for e in reg if want is None or e["id"] in want] or reg
     paths = {e["path"] for e in picked}
@@ -129,8 +134,9 @@ def _pick_sources(sources: list[str] | None) -> tuple[list[dict], list[str]]:
 
 
 def _doc_blocks_for(query: str, citations: bool, cache_last: bool,
-                    sources: list[str] | None = None) -> tuple[list, list[str]]:
-    docs, titles = _pick_sources(sources)
+                    sources: list[str] | None = None,
+                    user_id: str | None = None) -> tuple[list, list[str]]:
+    docs, titles = _pick_sources(sources, user_id)
     if not docs:
         return [], titles
     if sources:
@@ -217,7 +223,7 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
     _conv_of[sess.id] = conv_id
 
     doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
-                                              sources=body.sources)
+                                              sources=body.sources, user_id=user_id)
 
     async def gen():
         yield _sse({"type": "session", "session_id": sess.id, "conversation_id": conv_id})
@@ -264,8 +270,8 @@ async def quiz(body: QuizIn, x_device_id: str = Header(None)):
     infos = [NODE_BY_ID[cid] for cid in covered]
     # Same source selection as chat. Was: the ENTIRE corpus — 11 papers blows past the
     # 1M context window on a real key, and rewrote the cache prefix every quiz.
-    quiz_docs, _ = _doc_blocks_for(" ".join(c["label"] for c in infos),
-                                   citations=False, cache_last=True, sources=body.sources)
+    quiz_docs, _ = _doc_blocks_for(" ".join(c["label"] for c in infos), citations=False,
+                                   cache_last=True, sources=body.sources, user_id=device)
     async with sess.lock:
         questions = await llm.make_quiz(quiz_docs, infos)
     quiz_id = sess.add_quiz(questions)
@@ -380,29 +386,40 @@ async def delete_conversation(conv_id: str):
 
 # ---- corpus: list + upload ----------------------------------------------------
 @app.get("/corpus")
-async def get_corpus():
-    """The uploaded sources, for the 소스 panel. Order = registry order (stable)."""
-    return {"sources": [{"id": e["id"], "title": e["title"]} for e in corpus.load_corpus()]}
+async def get_corpus(x_device_id: str = Header(None)):
+    """The sources this user may read: shared papers + their own uploads.
+    Order = registry order (stable), so the UI list doesn't reshuffle."""
+    uid = learner(x_device_id)
+    return {"sources": [{"id": e["id"], "title": e["title"], "owner": e.get("owner"),
+                         "mine": e.get("owner") == uid}
+                        for e in corpus.visible_corpus(uid)]}
 
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...), title: str = Form(...)):
+async def upload(file: UploadFile = File(...), title: str = Form(...),
+                 x_device_id: str = Header(None)):
     contents = await file.read()
     try:
         check_upload_size(len(contents), settings.MAX_UPLOAD_MB)
     except ValueError as e:
         raise HTTPException(413, str(e))
-    UPLOADS.mkdir(exist_ok=True)
-    dest = UPLOADS / file.filename
+    owner = learner(x_device_id)
+    # Per-owner directory: two users uploading "paper.pdf" must not overwrite each other.
+    dest_dir = UPLOADS / owner
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / Path(file.filename).name
     dest.write_bytes(contents)
-    corpus.add_pdf(str(dest), title)
+    corpus.add_pdf(str(dest), title, owner=owner)
     corpus._reset_index()
     regenerated = "skipped (mock or no key)"
     if not llm.MOCK:
         global _uploaded
         _uploaded = _upload_corpus(papers.client())
+        # ponytail: the concept graph is global, so it is rebuilt from the SHARED papers
+        # only — one user's upload must not rewrite everyone else's map.
         regenerated = corpus.regenerate_graph()
-    return {"corpus_size": len(corpus.load_corpus()), "title": title, "regenerated": regenerated}
+    return {"corpus_size": len(corpus.visible_corpus(owner)), "title": title,
+            "regenerated": regenerated}
 
 
 # ---- ops: metrics, analytics, health ------------------------------------------

@@ -181,6 +181,7 @@
   .srcitem input[type=checkbox] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--on); cursor: pointer; }
   .srcitem .stitle { flex: 1; min-width: 0; font-size: 14px; color: var(--on); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .srcitem.off .stitle { color: var(--ink-faint); }
+  .sbadge { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: var(--ink-faint); border: 1px solid var(--hairline); border-radius: var(--radius-pill); padding: 3px 8px; }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 20; }
   .modal.open { display: flex; }
   .modalcard { background: var(--canvas-soft); border-radius: var(--radius-md); padding: 22px; width: 320px; max-width: 90%; border: 1px solid var(--hairline); }
@@ -1012,7 +1013,9 @@ function renderSources(){
     cb.setAttribute('aria-label', s.title);
     cb.onchange = onSourceToggle;
     row.appendChild(cb);
-    row.insertAdjacentHTML('beforeend', `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>`);
+    row.insertAdjacentHTML('beforeend',
+      `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>` +
+      `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>`);
     body.appendChild(row);
   });
 }

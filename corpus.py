@@ -33,34 +33,53 @@ def source_id(path: str) -> str:
 
 
 def load_corpus() -> list[dict]:
-    """The registry as [{"id","path","title"}]. Seeds from papers.PAPERS if absent."""
+    """The FULL registry as [{"id","path","title","owner"}]. Seeds from papers.PAPERS.
+
+    owner is None for the seeded/shared papers everyone sees, or a user_id for a
+    PDF someone uploaded. Callers that serve a user want visible_corpus() instead.
+    """
     if _CORPUS.exists():
         reg = json.loads(_CORPUS.read_text())
-        if any("id" not in e for e in reg):  # backfill registries written before ids existed
+        if any("id" not in e or "owner" not in e for e in reg):  # backfill older registries
             for e in reg:
                 e.setdefault("id", source_id(e["path"]))
+                e.setdefault("owner", None)  # pre-isolation uploads stay shared
             _CORPUS.write_text(json.dumps(reg, indent=2))
         return reg
-    reg = [{"id": source_id(p), "path": p, "title": t} for p, t in papers.PAPERS]
+    reg = [{"id": source_id(p), "path": p, "title": t, "owner": None} for p, t in papers.PAPERS]
     _CORPUS.write_text(json.dumps(reg, indent=2))
     return reg
 
 
-def add_pdf(path: str, title: str) -> dict:
+def visible_corpus(user_id: str | None = None) -> list[dict]:
+    """What one user may see: the shared seed papers + their own uploads.
+    user_id=None means "no user context" -> shared papers only."""
+    return [e for e in load_corpus() if e.get("owner") in (None, user_id)]
+
+
+def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
     """Append an entry (dedupe by path), persist, return it. Offline/pure — no upload."""
     reg = load_corpus()
     for e in reg:
         if e["path"] == path:
             return e  # already registered; upload happens lazily via ensure_uploaded
-    entry = {"id": source_id(path), "path": path, "title": title}
+    entry = {"id": source_id(path), "path": path, "title": title, "owner": owner}
     reg.append(entry)
     _CORPUS.write_text(json.dumps(reg, indent=2))
     return entry
 
 
 def corpus_papers() -> list[tuple]:
-    """Registry as papers.PAPERS-shaped tuples, for the shared upload path."""
+    """Registry as papers.PAPERS-shaped tuples, for the shared upload path.
+    Every path, all owners — file_ids are per-FILE, so one upload serves everyone
+    who can see it; visibility is enforced at selection time, not here."""
     return [(e["path"], e["title"]) for e in load_corpus()]
+
+
+def shared_papers() -> list[tuple]:
+    """Only the shared (owner=None) papers — what the global concept graph is built from,
+    so one user's upload can't rewrite everyone else's graph."""
+    return [(e["path"], e["title"]) for e in load_corpus() if e.get("owner") is None]
 
 
 # ------------------------------------------------------------ text extract ---
@@ -174,10 +193,19 @@ def regenerate_graph_needed(prev_titles, cur_titles) -> bool:
 
 
 def regenerate_graph() -> str:
-    """Rebuild graph.json from the current corpus via generate_graph.main() (needs API key)."""
+    """Rebuild graph.json from the SHARED papers via generate_graph.main() (needs API key).
+
+    graph.json is a single global file, so it is built from owner=None entries only —
+    otherwise one user's upload would rewrite the concept map everyone else sees.
+    """
     try:
         import generate_graph
-        generate_graph.main()
+        orig = papers.PAPERS
+        try:
+            papers.PAPERS = shared_papers()
+            generate_graph.main()
+        finally:
+            papers.PAPERS = orig
         return "graph regenerated"
     except Exception as e:  # noqa: BLE001 — POC: surface any failure as status, don't crash caller
         return f"graph regen failed: {e}"
@@ -199,11 +227,24 @@ if __name__ == "__main__":
         # (b) add_pdf dedupes and persists
         e1 = add_pdf("papers/zz-new.pdf", "New Paper")
         assert e1 == {"id": source_id("papers/zz-new.pdf"),
-                      "path": "papers/zz-new.pdf", "title": "New Paper"}
+                      "path": "papers/zz-new.pdf", "title": "New Paper", "owner": None}
         assert len({e["id"] for e in load_corpus()}) == len(load_corpus()), "ids must be unique"
+
         assert len(load_corpus()) == n0 + 1
         add_pdf("papers/zz-new.pdf", "New Paper (dupe)")  # same path
         assert len(load_corpus()) == n0 + 1, "dedupe by path failed"
+
+        # (b2) ownership: seeds are shared, uploads are private to their owner
+        add_pdf("uploads/alice.pdf", "Alice's paper", owner="userA")
+        add_pdf("uploads/bob.pdf", "Bob's paper", owner="userB")
+        a = {e["title"] for e in visible_corpus("userA")}
+        b = {e["title"] for e in visible_corpus("userB")}
+        assert "Alice's paper" in a and "Bob's paper" not in a, a
+        assert "Bob's paper" in b and "Alice's paper" not in b, b
+        assert "New Paper" in a and "New Paper" in b, "owner=None stays shared"
+        assert {e["title"] for e in visible_corpus(None)} == {e["title"] for e in load_corpus()
+                                                             if e.get("owner") is None}
+        assert "Alice's paper" not in {t for _, t in shared_papers()}, "graph must skip uploads"
 
         # (c) bm25 ranks the obviously-relevant toy doc first
         docs = [
