@@ -266,6 +266,15 @@
   .convcard .ctitle { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on); }
   .convcard .cmeta { font-size: 11px; color: var(--on-mute); margin-top: 3px; text-transform: uppercase; letter-spacing: .8px; }
   .convcard .cdel { color: var(--on-mute); font-size: 15px; cursor: pointer; padding: 2px 4px; transition: color .15s ease; }
+  #history .pane-toolbar { align-items: center; }
+  .convsearch { flex: 1; min-width: 0; margin-right: auto; padding: 9px 12px; font-size: 13px; font-family: var(--sans);
+                color: var(--on); background: var(--canvas-soft); border: 1px solid var(--hairline);
+                border-radius: var(--radius-pill); }
+  .convsearch::placeholder { color: var(--ink-faint); }
+  .convsearch:focus { outline: none; border-color: var(--on); box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+  .csnip { font-size: 12px; color: var(--on-mute); margin-top: 4px; line-height: 1.5;
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .csnip mark { background: var(--on); color: var(--canvas); padding: 0 2px; border-radius: 2px; }
   .convcard .cdel:hover { color: var(--danger); }
   #acctname { width: 100%; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); font-size: 14px; margin-bottom: 12px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); transition: border-color .15s ease, box-shadow .15s ease; }
   #acctname::placeholder { color: var(--ink-faint); }
@@ -385,6 +394,8 @@
       <!-- 기록 -->
       <div class="tabpane" role="tabpanel" aria-label="기록" data-pane="history" id="history">
         <div class="pane-toolbar">
+          <input id="convsearch" class="convsearch" type="search" autocomplete="off"
+                 placeholder="대화 검색 (본문까지)" aria-label="대화 검색">
           <button type="button" class="ghostbtn" id="historystats"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg>통계</button>
           <button type="button" class="ghostbtn" id="historyclose">대화로</button>
         </div>
@@ -1618,7 +1629,12 @@ document.getElementById('newconv').onclick = newConversation;
 
 function shortTime(s){
   if(!s) return '';
-  const t = new Date(s); if(isNaN(t)) return String(s).slice(0, 16).replace('T', ' ');
+  // 서버의 updated_at은 epoch '초'인데 Date()는 밀리초로 읽는다. 그대로 넣으면
+  // 2026년이 1970-01-21이 되어 모든 대화가 "1/22"로 찍혔다.
+  const t = (typeof s === 'number' || /^\d+(\.\d+)?$/.test(s))
+    ? new Date(Number(s) * (Number(s) < 1e12 ? 1000 : 1))
+    : new Date(s);
+  if(isNaN(t)) return String(s).slice(0, 16).replace('T', ' ');
   const diff = (Date.now() - t.getTime()) / 1000;
   if(diff < 60) return '방금';
   if(diff < 3600) return Math.floor(diff/60) + '분 전';
@@ -1657,15 +1673,31 @@ async function openHistory(){
   loadConversations();
 }
 
+// 검색어 안의 매치를 <mark>로 감싼다. esc() 후에 감싸야 하므로 순서에 주의.
+function markHit(text, q){
+  const s = esc(text || '');
+  if(!q) return s;
+  const i = s.toLowerCase().indexOf(esc(q).toLowerCase());
+  if(i < 0) return s;
+  const n = esc(q).length;
+  return s.slice(0, i) + '<mark>' + s.slice(i, i + n) + '</mark>' + s.slice(i + n);
+}
+
 async function loadConversations(){
   const body = document.getElementById('historybody');
+  const q = (document.getElementById('convsearch').value || '').trim();
   body.innerHTML = '<div class="empty">불러오는 중…</div>';
   try {
-    const r = await fetch('/conversations', { headers: hdr() });
+    const r = await fetch('/conversations' + (q ? '?q=' + encodeURIComponent(q) : ''), { headers: hdr() });
     if(!r.ok){ body.innerHTML = '<div class="empty">기록을 불러오지 못했어요.</div>'; return; }
     const d = await r.json();
     const convs = d.conversations || [];
-    if(!convs.length){ body.innerHTML = '<div class="empty">아직 대화 기록이 없어요.</div>'; return; }
+    if(!convs.length){
+      body.innerHTML = q
+        ? `<div class="empty">“${esc(q)}”가 들어간 대화가 없어요.</div>`
+        : '<div class="empty">아직 대화 기록이 없어요.</div>';
+      return;
+    }
     body.innerHTML = '';
     const cur = getConv();
     convs.forEach(c => {
@@ -1673,15 +1705,24 @@ async function loadConversations(){
       card.className = 'convcard' + (c.id === cur ? ' active' : '');  // 현재 열린 대화만 활성 표시
       if(c.id === cur) card.setAttribute('aria-current', 'true');
       card.innerHTML =
-        `<div class="cmain"><div class="ctitle">${esc(c.title || '(제목 없음)')}</div>`+
-        `<div class="cmeta">${esc(shortTime(c.updated_at))} · ${c.msg_count||0}개 메시지</div></div>`+
-        `<div class="cdel" title="삭제">🗑</div>`;
+        `<div class="cmain"><div class="ctitle">${markHit(c.title || '(제목 없음)', q)}</div>`+
+        `<div class="cmeta">${esc(shortTime(c.updated_at))} · ${c.msg_count||0}개 메시지</div>`+
+        // 검색 결과에는 매치된 문장 조각을 한 줄 붙인다 — 제목만으로는 왜 걸렸는지 모른다
+        (c.snippet ? `<div class="csnip">${markHit(c.snippet, q)}</div>` : '')+
+        `</div><div class="cdel" title="삭제">🗑</div>`;
       card.querySelector('.cmain').onclick = () => resumeConversation(c.id, c.title);
       card.querySelector('.cdel').onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
       body.appendChild(card);
     });
   } catch(e){ body.innerHTML = '<div class="empty">기록을 불러오지 못했어요.</div>'; }
 }
+
+// 타이핑마다 요청하지 않는다 — 200ms 멈추면 한 번 보낸다.
+let convSearchT = null;
+document.getElementById('convsearch').addEventListener('input', () => {
+  clearTimeout(convSearchT);
+  convSearchT = setTimeout(loadConversations, 200);
+});
 
 // Resume: set conversation_id, CLEAR session_id (server rehydrates context from DB), replay messages.
 async function resumeConversation(id, title){

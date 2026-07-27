@@ -10,6 +10,18 @@ import time
 import uuid
 
 
+def _snippet(content, query, width=90):
+    """매치 주변만 잘라낸다. 카드 한 줄에 들어갈 만큼만 — 앞뒤는 …로 표시."""
+    if not content:
+        return ""
+    i = content.lower().find(query.lower())
+    if i < 0:
+        return content[:width].strip()
+    start = max(0, i - width // 3)
+    end = min(len(content), i + len(query) + width // 2)
+    return ("…" if start else "") + content[start:end].strip() + ("…" if end < len(content) else "")
+
+
 def _connect(db_path):
     # ponytail: single shared connection, single event-loop thread (see mastery.py).
     # check_same_thread=False reuses it across async endpoints. Ceiling: one thread /
@@ -96,6 +108,48 @@ class History:
             )
         ]
 
+    def search(self, user_id, query, limit=50):
+        """제목 + 메시지 본문으로 대화를 찾는다. 매치된 문장 조각(snippet)을 같이 준다.
+
+        ponytail: FTS5가 아니라 LIKE %q%를 쓴다. 고른 이유 —
+        (a) 이 앱의 대화량은 사용자당 수백 건 규모라 LIKE 풀스캔이 수 ms에 끝난다.
+            FTS5는 별도 가상 테이블 + 트리거로 messages와 동기화를 유지해야 하고,
+            그 동기화가 틀어지면 "있는데 안 나온다"가 되어 조용히 잘못된다.
+        (b) FTS5의 unicode61 토크나이저는 한국어를 공백 단위로만 자른다. "메타데이터를"과
+            "메타데이터"가 다른 토큰이라 조사가 붙으면 안 잡힌다. LIKE 부분일치가
+            오히려 한국어에서 더 잘 맞는다.
+        한계 — (1) 인덱스를 안 타므로 대화가 수만 건이 되면 느려진다. 그때 FTS5 +
+        트리그램 토크나이저로 간다. (2) 랭킹이 없다. 최근 순으로만 준다.
+        (3) 대소문자는 ASCII에서만 무시된다(SQLite 기본 NOCASE 한계).
+        """
+        q = (query or "").strip()
+        if not q:
+            return self.list_conversations(user_id)[:limit]
+        # 사용자가 친 %와 _는 리터럴이다. 안 막으면 "%" 한 글자가 전체 대화를 다 끌어온다.
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{esc}%"
+        rows = self.db.execute(
+            """SELECT c.id, c.title, c.updated_at,
+                      (SELECT COUNT(*) FROM messages m WHERE m.conv_id=c.id) AS msg_count,
+                      (SELECT m.content FROM messages m
+                        WHERE m.conv_id=c.id AND m.content LIKE ? ESCAPE '\\'
+                        ORDER BY m.created_at, m.id LIMIT 1) AS hit
+                 FROM conversations c
+                WHERE c.user_id=? AND c.deleted=0
+                  AND (c.title LIKE ? ESCAPE '\\' OR EXISTS(
+                        SELECT 1 FROM messages m WHERE m.conv_id=c.id
+                                 AND m.content LIKE ? ESCAPE '\\'))
+                ORDER BY c.updated_at DESC, c.id
+                LIMIT ?""",
+            (like, user_id, like, like, limit),
+        )
+        out = []
+        for r in rows:
+            out.append({"id": r["id"], "title": r["title"], "updated_at": r["updated_at"],
+                        "msg_count": r["msg_count"],
+                        "snippet": _snippet(r["hit"], q)})
+        return out
+
     def get_messages(self, conv_id):
         out = []
         for r in self.db.execute(
@@ -169,6 +223,40 @@ if __name__ == "__main__":
                  ("old1", conv, "assistant", "legacy answer", t0 + 3))
     h.db.commit()
     assert h.get_messages(conv)[-1]["meta"] is None
+
+    # ---- 검색: 제목만이 아니라 본문까지 ----
+    c2 = h.start_conversation("userA", now=t0 + 10)
+    h.append(c2, "user", "퀴즈 난이도 조절돼?", now=t0 + 11)
+    h.append(c2, "assistant", "간격반복으로 약한 개념부터 나옵니다", now=t0 + 12)
+
+    # 제목에 없는 단어가 본문에만 있어도 잡힌다 (이게 이 기능의 존재 이유)
+    hits = h.search("userA", "간격반복")
+    assert [x["id"] for x in hits] == [c2], hits
+    assert "간격반복" in hits[0]["snippet"], hits[0]
+    assert hits[0]["title"] == "퀴즈 난이도 조절돼?", hits[0]  # 제목은 그대로 온다
+
+    # 제목으로도 잡힌다
+    assert [x["id"] for x in h.search("userA", "TEM")] == [conv]
+    # 두 대화에 다 있는 단어면 최신순으로 둘 다
+    h.append(conv, "user", "간격반복이 뭐야", now=t0 + 13)
+    assert [x["id"] for x in h.search("userA", "간격반복")] == [conv, c2]
+    # 빈 질의는 전체 목록과 같다
+    assert len(h.search("userA", "   ")) == len(h.list_conversations("userA"))
+    # 없는 단어는 빈 목록
+    assert h.search("userA", "존재하지않는단어") == []
+    # 검색도 사용자별로 격리된다
+    assert h.search("userB", "간격반복") == []
+    # LIKE 와일드카드는 리터럴로 취급된다 (%만 넣어서 전체가 딸려오면 안 된다)
+    assert h.search("userA", "%") == [], "'%'가 와일드카드로 샜다"
+    assert h.search("userA", "_") == [], "'_'가 와일드카드로 샜다"
+
+    # snippet은 매치 주변만 자른다
+    long_conv = h.start_conversation("userA", now=t0 + 20)
+    h.append(long_conv, "assistant", "가" * 300 + "표적단어" + "나" * 300, now=t0 + 21)
+    sn = h.search("userA", "표적단어")[0]["snippet"]
+    assert "표적단어" in sn and len(sn) < 200, (len(sn), sn[:60])
+    assert sn.startswith("…") and sn.endswith("…"), sn
+    h.delete(long_conv); h.delete(c2)
 
     # isolation: another user sees nothing
     assert h.list_conversations("userB") == []

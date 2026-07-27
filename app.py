@@ -389,8 +389,12 @@ async def set_name(body: NameIn, x_device_id: str = Header(None)):
 
 
 @app.get("/conversations")
-async def conversations(x_device_id: str = Header(None)):
+async def conversations(q: str = "", x_device_id: str = Header(None)):
+    """대화 목록. q가 있으면 제목 + 메시지 본문까지 뒤져서 거른다.
+    검색 결과에는 매치된 문장 조각(snippet)이 붙는다."""
     uid = ACCOUNTS.resolve(dev(x_device_id))
+    if q.strip():
+        return {"conversations": HIST.search(uid, q), "query": q}
     return {"conversations": HIST.list_conversations(uid)}
 
 
