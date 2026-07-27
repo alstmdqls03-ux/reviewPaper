@@ -13,10 +13,10 @@
 <script src="cytoscape-cola.js"></script>
 <style>
   :root {
-    --canvas:#000; --canvas-soft:#0a0a0a; --surface:#0a0a0a; --hairline:#3a3a3f;
-    --on:#fff; --on-mute:#a9a9b2; --ink-faint:#8a8a94; --danger:#ff5a5a;
+    --canvas:#16181c; --canvas-soft:#1e2126; --surface:#1e2126; --hairline:#343841;
+    --on:#e9eaee; --on-mute:#b3b7c0; --ink-faint:#949aa5; --danger:#ff7b7b;
     /* 인터랙티브 요소의 보더는 --hairline(구분선용, 1.9:1)이 아니라 이걸 쓴다 — 비텍스트 대비 ≥3:1 */
-    --border:#5a5a5f; --focus:#ffffff;
+    --border:#6b7078; --focus:#ffffff;
     --sans:'Inter', -apple-system, 'Arial Narrow', Arial, sans-serif;
     --radius-sm:8px; --radius-md:16px; --radius-pill:32px;
     --rail:300px; --studio:380px;
@@ -60,7 +60,7 @@
   .srchead:hover { color: var(--on); }
   .srctoggle { flex-shrink: 0; text-transform: uppercase; letter-spacing: .6px; font-size: 10px; color: var(--ink-faint); }
   .srcrow.open .srctoggle { color: var(--on); }
-  .passage { display: none; padding: 2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--on-mute); font-style: italic; border-left: 2px solid var(--border, #5a5a5f); padding-left: 12px; margin: 0 0 8px; }
+  .passage { display: none; padding: 2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--on-mute); font-style: italic; border-left: 2px solid var(--border, #6b7078); padding-left: 12px; margin: 0 0 8px; }
   .srcrow.open .passage { display: block; }
   .cite { cursor: pointer; }
   .cite:hover { color: var(--on); }
@@ -69,7 +69,7 @@
   .ob-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--on); margin-bottom: 14px; }
   .ob-steps { list-style: none; counter-reset: ob; padding: 0; margin: 0; }
   .ob-steps li { counter-increment: ob; position: relative; padding: 0 0 12px 30px; font-size: 13.5px; line-height: 1.55; color: var(--on-mute); }
-  .ob-steps li::before { content: counter(ob); position: absolute; left: 0; top: 0; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--on); border: 1px solid var(--border, #5a5a5f); border-radius: 50%; }
+  .ob-steps li::before { content: counter(ob); position: absolute; left: 0; top: 0; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--on); border: 1px solid var(--border, #6b7078); border-radius: 50%; }
   .ob-steps li b { color: var(--on); font-weight: 600; }
   .ob-hint { margin-top: 6px; font-size: 12px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .8px; }
   .cursor::after { content: '▋'; color: var(--on); animation: blink 1s steps(2) infinite; }
@@ -118,7 +118,7 @@
   /* Graph pane */
   #graphpane { position: relative; background: var(--canvas); overflow: hidden; }
   #graphtoolbar { position: absolute; top: 12px; right: 14px; z-index: 4; display: flex; gap: 6px; }
-  .gbtn { padding: 7px 11px; min-height: 36px; font-size: 11px; letter-spacing: .8px; gap: 5px; background: rgba(10,10,10,.82); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-color: var(--border, #5a5a5f); }
+  .gbtn { padding: 7px 11px; min-height: 36px; font-size: 11px; letter-spacing: .8px; gap: 5px; background: rgba(22,24,28,.82); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-color: var(--border, #6b7078); }
   #cy { width: 100%; height: 100%; }
   #graphempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--ink-faint); pointer-events: none; }
   #panel { position: absolute; right: 0; top: 0; width: 280px; height: 100%; z-index: 5; background: var(--canvas-soft); border-left: 1px solid var(--hairline); padding: 20px; overflow-y: auto; transform: translateX(100%); transition: transform .2s ease; }
@@ -135,7 +135,7 @@
   #panel.collapsed { height: 46px; overflow: hidden; }
   #panel.collapsed #panelbody { opacity: 0; }
   #panel.collapsed .collapse { transform: rotate(180deg); }
-  .wiki-status { display: inline-block; margin: 2px 0 12px; padding: 3px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; border-radius: var(--radius-pill); border: 1px solid var(--border, #5a5a5f); color: var(--on-mute); }
+  .wiki-status { display: inline-block; margin: 2px 0 12px; padding: 3px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; border-radius: var(--radius-pill); border: 1px solid var(--border, #6b7078); color: var(--on-mute); }
   .wiki-status.s-known { background: var(--on); color: var(--canvas); border-color: var(--on); }
   .wiki-status.s-due { border-style: dashed; color: var(--on); }
   .wiki-status.s-learning { color: var(--on); }
@@ -147,8 +147,8 @@
   .wikilink .rel { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-faint); }
   .understood { width: 100%; margin-top: 16px; padding: 11px 14px; font-size: 12px; }
   .understood.on { background: var(--on); color: var(--canvas); border-color: var(--on); }
-  .understood.on:hover { background: #e6e6ea; }
-  #graphlabel { position: absolute; top: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--on-mute); background: rgba(10,10,10,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 6px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+  .understood.on:hover { background: #d9dbe1; }
+  #graphlabel { position: absolute; top: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--on-mute); background: rgba(22,24,28,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 6px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
   /* --- added: mastery / next_up / notes / upload --- */
   .hbtns { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
   .hbtns button { padding: 8px 13px; font-size: 12px; letter-spacing: 1px; }
@@ -228,7 +228,7 @@
   #citepop b { display: block; color: var(--on); font-size: 11px; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 5px; }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--canvas-soft); color: var(--on); border: 1px solid var(--hairline); padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13px; opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 30; }
   #toast.show { opacity: .98; }
-  #masterylegend { position: absolute; bottom: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--on-mute); background: rgba(10,10,10,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); line-height: 1.9; }
+  #masterylegend { position: absolute; bottom: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--on-mute); background: rgba(22,24,28,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); line-height: 1.9; }
   #masterylegend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 2px solid transparent; box-sizing: border-box; }
   /* --- added: account / history --- */
   #acct { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--on-mute); cursor: pointer; margin-top: 0; padding: 5px 12px; background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-pill); text-transform: uppercase; letter-spacing: .8px; transition: background .15s ease, border-color .15s ease, color .15s ease; }
@@ -373,9 +373,9 @@
         <div id="cy"></div>
         <div id="graphempty">대화를 시작하면 개념 지도가 자라납니다</div>
         <div id="masterylegend">
-          <div><span class="dot" style="border-color:#fff;background:#fff;"></span>학습 완료</div>
-          <div><span class="dot" style="border-color:#8a8a92;background:#0a0a0a;"></span>학습 중</div>
-          <div><span class="dot" style="border-color:#fff;background:#0a0a0a;border-style:dashed;"></span>복습 필요</div>
+          <div><span class="dot" style="border-color:#e9eaee;background:#e9eaee;"></span>학습 완료</div>
+          <div><span class="dot" style="border-color:#8b919d;background:#1e2126;"></span>학습 중</div>
+          <div><span class="dot" style="border-color:#e9eaee;background:#1e2126;border-style:dashed;"></span>복습 필요</div>
         </div>
         <div id="panel">
           <span class="collapse" onclick="togglePanel()" title="접기/펴기">⌄</span>
@@ -1029,34 +1029,34 @@ fetch('/graph').then(r=>r.json()).then(g=>{
       { selector:'node', style:{
         'label':'data(label)', 'font-size':11, 'text-wrap':'wrap', 'text-max-width':120,
         'text-valign':'bottom', 'text-margin-y':7, 'color':'#c9c9d2',
-        'text-outline-width':3, 'text-outline-color':'#000', 'font-weight':600,
+        'text-outline-width':3, 'text-outline-color':'#16181c', 'font-weight':600,
         'background-color':'#cbd5e1',
         'width':'mapData(deg, 0, 6, 15, 34)', 'height':'mapData(deg, 0, 6, 15, 34)',
         'transition-property':'opacity, background-color, border-color, width, height',
         'transition-duration':'160ms' } },
       { selector:'edge', style:{
         'label':'data(label)', 'font-size':9, 'color':'#cfcfd6', 'text-opacity':0,
-        'text-background-color':'#0a0a0a', 'text-background-opacity':0.8, 'text-background-padding':2,
-        'curve-style':'bezier', 'line-color':'#2f2f36', 'width':1.2, 'opacity':0.7,
+        'text-background-color':'#1e2126', 'text-background-opacity':0.8, 'text-background-padding':2,
+        'curve-style':'bezier', 'line-color':'#3f4550', 'width':1.2, 'opacity':0.7,
         'transition-property':'opacity, line-color, width', 'transition-duration':'160ms' } },
       // mastery (monochrome): known=filled bright, learning=hollow outline, due=dashed ring
-      { selector:'node.m-learning', style:{ 'background-color':'#141419', 'border-width':2, 'border-color':'#7c7c88', 'color':'#cfcfd6' } },
-      { selector:'node.m-known', style:{ 'background-color':'#fff', 'border-width':2, 'border-color':'#fff' } },
-      { selector:'node.m-due', style:{ 'border-width':2, 'border-color':'#fff', 'border-style':'dashed' } },
+      { selector:'node.m-learning', style:{ 'background-color':'#22252b', 'border-width':2, 'border-color':'#8b919d', 'color':'#cfcfd6' } },
+      { selector:'node.m-known', style:{ 'background-color':'#e9eaee', 'border-width':2, 'border-color':'#e9eaee' } },
+      { selector:'node.m-due', style:{ 'border-width':2, 'border-color':'#e9eaee', 'border-style':'dashed' } },
       // chat-active concepts: bright white, enlarged, soft glow
       { selector:'node.highlight', style:{
-        'background-color':'#fff', 'border-width':3, 'border-color':'#fff',
-        'width':26, 'height':26, 'color':'#fff', 'z-index':10,
-        'overlay-color':'#fff', 'overlay-opacity':0.16, 'overlay-padding':10 } },
+        'background-color':'#e9eaee', 'border-width':3, 'border-color':'#e9eaee',
+        'width':26, 'height':26, 'color':'#e9eaee', 'z-index':10,
+        'overlay-color':'#e9eaee', 'overlay-opacity':0.16, 'overlay-padding':10 } },
       { selector:'node.dim', style:{ 'opacity':0.3 } },
       { selector:'edge.dim', style:{ 'opacity':0.08 } },
       // just-revealed pop-glow
-      { selector:'node.justadded', style:{ 'overlay-color':'#fff', 'overlay-opacity':0.32, 'overlay-padding':12 } },
+      { selector:'node.justadded', style:{ 'overlay-color':'#e9eaee', 'overlay-opacity':0.32, 'overlay-padding':12 } },
       // hover neighborhood focus
       { selector:'.faded', style:{ 'opacity':0.1 } },
       { selector:'node.nbr', style:{ 'opacity':1 } },
-      { selector:'node.nbrhub', style:{ 'background-color':'#fff', 'border-width':3, 'border-color':'#fff', 'width':30, 'height':30, 'color':'#fff', 'z-index':20 } },
-      { selector:'edge.nbr', style:{ 'opacity':1, 'line-color':'#fff', 'width':2, 'text-opacity':1,
+      { selector:'node.nbrhub', style:{ 'background-color':'#e9eaee', 'border-width':3, 'border-color':'#e9eaee', 'width':30, 'height':30, 'color':'#e9eaee', 'z-index':20 } },
+      { selector:'edge.nbr', style:{ 'opacity':1, 'line-color':'#e9eaee', 'width':2, 'text-opacity':1,
         'line-style':'dashed', 'line-dash-pattern':[6,5] } }
     ]
   });
