@@ -350,7 +350,13 @@ async def delete_conversation(conv_id: str):
     return {"ok": True}
 
 
-# ---- corpus upload ------------------------------------------------------------
+# ---- corpus: list + upload ----------------------------------------------------
+@app.get("/corpus")
+async def get_corpus():
+    """The uploaded sources, for the 소스 panel. Order = registry order (stable)."""
+    return {"sources": [{"id": e["id"], "title": e["title"]} for e in corpus.load_corpus()]}
+
+
 @app.post("/upload")
 async def upload(file: UploadFile = File(...), title: str = Form(...)):
     contents = await file.read()

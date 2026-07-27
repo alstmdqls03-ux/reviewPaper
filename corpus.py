@@ -8,6 +8,7 @@ ponytail: BM25 is hand-rolled (no rank-bm25 dep) and pure-Python — it's ~40
 lines and unit-testable. Upgrade to embeddings/a vector store only if page-level
 lexical recall measurably misses (synonyms, cross-lingual KO↔EN queries).
 """
+import hashlib
 import json
 import math
 import re
@@ -26,11 +27,21 @@ MAX_DOCS = 5  # long-context ceiling: how many papers we hand the model per quer
 
 
 # ---------------------------------------------------------------- registry ---
+def source_id(path: str) -> str:
+    """Stable short id for a registry entry — what the UI selects/deselects by."""
+    return hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
+
+
 def load_corpus() -> list[dict]:
-    """The registry as [{"path","title"}]. Seeds from papers.PAPERS if absent."""
+    """The registry as [{"id","path","title"}]. Seeds from papers.PAPERS if absent."""
     if _CORPUS.exists():
-        return json.loads(_CORPUS.read_text())
-    reg = [{"path": p, "title": t} for p, t in papers.PAPERS]
+        reg = json.loads(_CORPUS.read_text())
+        if any("id" not in e for e in reg):  # backfill registries written before ids existed
+            for e in reg:
+                e.setdefault("id", source_id(e["path"]))
+            _CORPUS.write_text(json.dumps(reg, indent=2))
+        return reg
+    reg = [{"id": source_id(p), "path": p, "title": t} for p, t in papers.PAPERS]
     _CORPUS.write_text(json.dumps(reg, indent=2))
     return reg
 
@@ -41,7 +52,7 @@ def add_pdf(path: str, title: str) -> dict:
     for e in reg:
         if e["path"] == path:
             return e  # already registered; upload happens lazily via ensure_uploaded
-    entry = {"path": path, "title": title}
+    entry = {"id": source_id(path), "path": path, "title": title}
     reg.append(entry)
     _CORPUS.write_text(json.dumps(reg, indent=2))
     return entry
@@ -187,7 +198,9 @@ if __name__ == "__main__":
 
         # (b) add_pdf dedupes and persists
         e1 = add_pdf("papers/zz-new.pdf", "New Paper")
-        assert e1 == {"path": "papers/zz-new.pdf", "title": "New Paper"}
+        assert e1 == {"id": source_id("papers/zz-new.pdf"),
+                      "path": "papers/zz-new.pdf", "title": "New Paper"}
+        assert len({e["id"] for e in load_corpus()}) == len(load_corpus()), "ids must be unique"
         assert len(load_corpus()) == n0 + 1
         add_pdf("papers/zz-new.pdf", "New Paper (dupe)")  # same path
         assert len(load_corpus()) == n0 + 1, "dedupe by path failed"
