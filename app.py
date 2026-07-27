@@ -63,7 +63,6 @@ NODES, EDGES = _GRAPH["nodes"], _GRAPH["edges"]
 NODE_BY_ID = {n["id"]: n for n in NODES}
 UPLOADS = Path("uploads")
 _uploaded: list = []
-_conv_of: dict = {}  # session_id -> persisted conversation_id
 
 
 @asynccontextmanager
@@ -231,7 +230,6 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
             if m["role"] == "assistant":
                 sess.turns += 1
                 sess.covered_concepts |= set(match_concepts(m["content"], NODES))
-    _conv_of[sess.id] = conv_id
 
     try:
         doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
@@ -255,7 +253,9 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                     elif kind == "usage":  # real-mode token cost -> /metrics (MOCK never emits this)
                         METRICS.add_cost("/chat", obs.estimate_cost(
                             payload["input_tokens"], payload["output_tokens"],
-                            model=settings.MODEL, cache_read_tokens=payload.get("cache_read_tokens", 0)))
+                            model=settings.MODEL,
+                            cache_read_tokens=payload.get("cache_read_tokens", 0),
+                            cache_write_tokens=payload.get("cache_write_tokens", 0)))
                     else:
                         payload["source_id"] = title_to_id.get(payload.get("title") or "")
                         citations.append(payload)
@@ -320,7 +320,6 @@ async def grade(body: GradeIn, x_device_id: str = Header(None)):
 async def session_reset(body: QuizIn):
     """Wipe the live session (chat/concepts/turns/quizzes), keeping the same id."""
     store.get_or_create(body.session_id).reset()
-    _conv_of.pop(body.session_id, None)
     return {"ok": True, "session_id": body.session_id}
 
 

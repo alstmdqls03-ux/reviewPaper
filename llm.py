@@ -103,6 +103,9 @@ async def stream_chat(messages: list, system: str):
             "input_tokens": getattr(u, "input_tokens", 0) or 0,
             "output_tokens": getattr(u, "output_tokens", 0) or 0,
             "cache_read_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+            # 캐시 쓰기는 가장 비싼 항목인데(1h TTL = 입력 단가의 2배) 여기서 안 읽어서
+            # /metrics의 비용에 0으로 잡히고 있었다. 코퍼스 10편이면 첫 질문이 곧 이것이다.
+            "cache_write_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
         })
 
 

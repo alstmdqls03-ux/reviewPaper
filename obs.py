@@ -49,10 +49,25 @@ _RATES = {
 
 
 def estimate_cost(input_tokens: int, output_tokens: int, model: str = "claude-opus-4-8",
-                  cache_read_tokens: int = 0) -> float:
+                  cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+                  cache_ttl: str = "1h") -> float:
+    """USD for one call. The four token buckets bill at different rates:
+
+    input       1x    (uncached prompt)
+    output      out
+    cache read  0.1x  input
+    cache write 2x    input for a 1h breakpoint, 1.25x for the 5m default
+
+    cache_write was missing until 2026-07-28, so /metrics reported the *cheapest*
+    part of an expensive first call and zero for its most expensive part.
+    papers.document_blocks sets ttl="1h", hence the 2x default here.
+    """
     r = _RATES.get(model, _RATES["claude-opus-4-8"])
-    cache = (cache_read_tokens / 1_000_000) * r["in"] * 0.1  # cached reads bill ~10%
-    return (input_tokens / 1_000_000) * r["in"] + (output_tokens / 1_000_000) * r["out"] + cache
+    write_mult = 2.0 if cache_ttl == "1h" else 1.25
+    return ((input_tokens / 1_000_000) * r["in"]
+            + (output_tokens / 1_000_000) * r["out"]
+            + (cache_read_tokens / 1_000_000) * r["in"] * 0.1
+            + (cache_write_tokens / 1_000_000) * r["in"] * write_mult)
 
 
 def log_line(**fields) -> None:
@@ -149,6 +164,15 @@ if __name__ == "__main__":
     # model selection changes the rate; cache reads bill ~10% of input
     assert abs(estimate_cost(1000, 500, model="claude-haiku-4-5") - 0.0035) < 1e-9  # 0.001 + 0.0025
     assert abs(estimate_cost(0, 0, cache_read_tokens=1_000_000) - 0.5) < 1e-9        # 5.0 * 0.1
+
+    # cache WRITE is the expensive one and used to be missing entirely (billed as $0).
+    # 1h breakpoint = 2x input; the 5m default = 1.25x.
+    assert abs(estimate_cost(0, 0, cache_write_tokens=1_000_000) - 10.0) < 1e-9       # 5.0 * 2
+    assert abs(estimate_cost(0, 0, cache_write_tokens=1_000_000, cache_ttl="5m") - 6.25) < 1e-9
+    # a cold first question (write) must cost far more than a warm one (read)
+    cold = estimate_cost(0, 800, cache_write_tokens=300_000)
+    warm = estimate_cost(0, 800, cache_read_tokens=300_000)
+    assert cold > warm * 15, (cold, warm)
 
     # add_cost: token-based cost folds into the path + grand total (Phase 4 /metrics)
     m.add_cost("/chat", estimate_cost(2000, 800))  # 0.01 + 0.02 = 0.03
