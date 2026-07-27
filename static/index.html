@@ -798,7 +798,9 @@ async function send(){
 function handleEvent(ev, bot){
   switch(ev.type){
     case 'session': {
-      setSession(ev.session_id); setConv(ev.conversation_id);
+      setSession(ev.session_id);
+      adoptSelection(ev.conversation_id);   // '새 대화' 버킷의 선택을 이 대화의 것으로
+      setConv(ev.conversation_id);
       RENDERED_CONV = ev.conversation_id;
       // 첫 메시지로 대화가 생기면 URL도 그 대화를 가리키게 한다 (replaceState:
       // 스트리밍 중에 뒤로가기 히스토리를 더럽히지 않으려고).
@@ -1283,13 +1285,53 @@ function hideCitePop(){ citePop.classList.remove('show'); }
 let SOURCES = [];  // [{id, title, mine, added_at}] as returned by GET /corpus
 let SRC_MAX = 0;   // 사용자당 업로드 상한 (서버 설정)
 
-// rp_sources = 명시적으로 선택된 id 배열. 키가 없으면 "전부 선택" (기본값).
-// ponytail: null=전체 이므로 새로 올라온 논문은 자동으로 체크된 상태가 된다.
-function getSelected(){
-  try { const v = JSON.parse(localStorage.getItem('rp_sources')); return Array.isArray(v) ? v : null; }
-  catch(e){ return null; }
+// 소스 선택은 '대화별'이다. NotebookLM의 노트북 = 소스 묶음 + 대화이고, 선택이
+// 전역 1개면 화면 두 곳이 서로 다른 소스 집합을 주장하게 된다 (docs/benchmark-gap.md G1·G2):
+// 대화 A에서 2편만 고르고 → B에서 다른 걸 고르고 → A로 돌아오면, A의 옛 답변 위에는
+// 2편이 적혀 있는데 왼쪽 레일은 B의 선택을 체크해 보여준다.
+//
+// 저장은 localStorage 한 곳: rp_sources_by_conv = {conversation_id: [source_id,...]}.
+// 서버(conversations 테이블)에 넣으면 기기 간에도 따라오지만 그건 스키마 변경이라
+// 오늘 범위 밖 — 로드맵으로 넘겼다. ponytail: 키 하나로 끝나는 이관을 먼저 한다.
+const SEL_KEY = 'rp_sources_by_conv';
+const SEL_LEGACY = 'rp_sources';        // 대화별 이전의 전역 키 (이관용으로만 읽는다)
+
+function _selMap(){
+  try { const v = JSON.parse(localStorage.getItem(SEL_KEY)); return (v && typeof v === 'object') ? v : {}; }
+  catch(e){ return {}; }
 }
-function setSelected(ids){ localStorage.setItem('rp_sources', JSON.stringify(ids)); }
+// 아직 대화가 시작되지 않았으면(conversation_id 없음) '새 대화' 버킷에 담아두고,
+// 첫 답변에서 conversation_id를 받는 순간 그 대화로 옮긴다.
+function selBucket(){ return getConv() || '__new__'; }
+
+function getSelected(){
+  const map = _selMap();
+  const here = map[selBucket()];
+  if(Array.isArray(here)) return here;
+  // 이관: 이 버전을 처음 여는 사용자는 예전 전역 선택을 그대로 물려받는다.
+  // (체크가 초기화되면 "왜 갑자기 다 켜졌지"가 된다)
+  try { const old = JSON.parse(localStorage.getItem(SEL_LEGACY)); if(Array.isArray(old)) return old; }
+  catch(e){ /* 무시하고 전체 선택으로 */ }
+  return null;   // null = 전부 선택 (새로 올라온 논문도 자동으로 체크된다)
+}
+function setSelected(ids){
+  const map = _selMap();
+  map[selBucket()] = ids;
+  localStorage.setItem(SEL_KEY, JSON.stringify(map));
+}
+// 첫 답변에서 대화 id가 생기면 '새 대화' 버킷을 그 대화로 승격한다.
+function adoptSelection(convId){
+  const map = _selMap();
+  if(!convId || map[convId] || !Array.isArray(map.__new__)) return;
+  map[convId] = map.__new__;
+  delete map.__new__;
+  localStorage.setItem(SEL_KEY, JSON.stringify(map));
+}
+// 대화를 지우면 그 선택도 같이 지운다 (안 지우면 localStorage가 영원히 자란다).
+function dropSelection(convId){
+  const map = _selMap();
+  if(convId in map){ delete map[convId]; localStorage.setItem(SEL_KEY, JSON.stringify(map)); }
+}
 function selectedIds(){
   const sel = getSelected(), all = SOURCES.map(s => s.id);
   return sel === null ? all : all.filter(id => sel.includes(id));
@@ -1656,14 +1698,22 @@ setConvTitle(getConvTitle());
 
 // 채팅 로그를 빈 새 대화 상태로 되돌린다 (탭은 건드리지 않음).
 function resetChat(){
+  // 새 대화는 직전 대화의 선택을 출발점으로 물려받는다. 빈 화면에서 소스를 다시
+  // 고르게 하는 것보다 낫고, 여기서 바꾸면 그 순간부터 이 대화만의 선택이 된다.
+  // (rp_conv를 지우기 전에 읽어야 직전 대화의 것이 잡힌다)
+  const carry = getSelected();
   localStorage.removeItem('rp_session');
   localStorage.removeItem('rp_conv');
+  const map = _selMap();
+  if(Array.isArray(carry)) map.__new__ = carry; else delete map.__new__;
+  localStorage.setItem(SEL_KEY, JSON.stringify(map));
   log.innerHTML = ONBOARD;
   suggest.style.display = '';
   document.getElementById('quizbar').style.display = 'none';
   RENDERED_CONV = null;
   setConvTitle(NEW_CONV_TITLE);
   highlightConcepts([]);
+  renderSources();
 }
 
 function newConversation(){ resetChat(); navigate('chat'); }
@@ -1733,6 +1783,8 @@ async function resumeConversation(id, title){
     localStorage.setItem('rp_conv', id);
     localStorage.removeItem('rp_session');
     RENDERED_CONV = id;
+    renderSources();          // 이 대화의 소스 선택으로 레일 체크를 바꾼다
+    refreshSuggestions();
     setConvTitle(title || d.title);  // 딥링크로 들어오면 목록을 안 거치므로 서버 제목을 쓴다
     log.innerHTML = '';
     (d.messages || []).forEach(m => {
@@ -1776,6 +1828,7 @@ async function deleteConversation(id){
     const r = await fetch('/conversations/' + encodeURIComponent(id), { method:'DELETE', headers: hdr() });
     if(!r.ok){ toast('삭제 실패 (' + r.status + ')'); return; }
     if(getConv() === id) resetChat();  // 열려 있던 대화를 지웠으면 로그도 빈 새 대화로
+    dropSelection(id);                 // 그 대화의 소스 선택도 같이 (안 지우면 계속 쌓인다)
     loadConversations();
     toast('삭제했어요');
   } catch(e){ toast('삭제 실패'); }
