@@ -43,7 +43,12 @@ SYSTEM = (
     "You help a new electron-microscopy researcher study a corpus of review papers. "
     "Answer only from the attached papers. Be concise and concrete. When a concept connects "
     "to related concepts across the papers, say so explicitly so the reader can learn by "
-    "following the links — that is the point of this tool. If the papers don't cover something, say so."
+    "following the links — that is the point of this tool.\n"
+    "Grounding rule (strict): every factual claim must come from the attached documents and "
+    "carry a citation. If the attached papers do not cover the question, reply exactly "
+    "'선택한 소스에서 다루지 않는 내용입니다.' and then name what the sources DO cover that is "
+    "closest to the question. Never fill a gap from background knowledge, and never cite a "
+    "document for something it does not say."
 )
 
 store = SessionStore(ttl=settings.SESSION_TTL)
@@ -224,6 +229,8 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
 
     doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
                                               sources=body.sources, user_id=user_id)
+    # Citations name a document by title; the viewer needs its source id to fetch pages.
+    title_to_id = {e["title"]: e["id"] for e in corpus.visible_corpus(user_id)}
 
     async def gen():
         yield _sse({"type": "session", "session_id": sess.id, "conversation_id": conv_id})
@@ -241,6 +248,7 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                             payload["input_tokens"], payload["output_tokens"],
                             model=settings.MODEL, cache_read_tokens=payload.get("cache_read_tokens", 0)))
                     else:
+                        payload["source_id"] = title_to_id.get(payload.get("title") or "")
                         citations.append(payload)
                         yield _sse({"type": "citation", "citation": payload})
                 answer = "".join(parts)
@@ -249,7 +257,9 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                 sess.add_assistant(answer, concepts)
                 MASTERY.record_covered(user_id, concepts)
                 HIST.append(conv_id, "user", message)
-                HIST.append(conv_id, "assistant", answer)
+                # citations ride along so replaying this conversation restores its footnotes
+                HIST.append(conv_id, "assistant", answer,
+                            meta={"citations": citations, "sources": used_titles})
                 yield _sse({"type": "done", "concepts": concepts,
                             "quiz_available": sess.quiz_available, "turns": sess.turns})
             except Exception as e:
@@ -396,6 +406,54 @@ async def get_corpus(x_device_id: str = Header(None)):
                          "mine": e.get("owner") == uid, "added_at": e.get("added_at")}
                         for e in corpus.visible_corpus(uid)],
             "owned": corpus.owned_count(uid), "max_sources": settings.MAX_SOURCES}
+
+
+@app.get("/corpus/{sid}/page/{page}")
+async def source_page(sid: str, page: int, x_device_id: str = Header(None)):
+    """One page of extracted text from a source you can see — backs the 원문 viewer.
+
+    Text comes from the same pypdf extraction the BM25 index uses (text_cache), so it
+    costs nothing per read. Layout is lost; this shows what a page SAYS, not how it looks.
+    """
+    uid = learner(x_device_id)
+    entry = next((e for e in corpus.visible_corpus(uid) if e["id"] == sid), None)
+    if entry is None:
+        raise HTTPException(404, "그 소스를 볼 권한이 없어요.")
+    try:
+        pages = corpus.extract_pages(entry["path"])
+    except Exception as e:  # noqa: BLE001 — missing file / unreadable PDF is a 404, not a 500
+        raise HTTPException(404, f"원문을 읽지 못했어요: {type(e).__name__}")
+    if not 1 <= page <= len(pages):
+        raise HTTPException(404, f"{page}쪽은 없어요 (전체 {len(pages)}쪽).")
+    return {"id": sid, "title": entry["title"], "page": page,
+            "total_pages": len(pages), "text": pages[page - 1][1]}
+
+
+@app.get("/suggestions")
+async def suggestions(sources: str = "", x_device_id: str = Header(None)):
+    """Starter questions derived from the SELECTED sources, not a hardcoded list.
+
+    Built from graph.json (concepts already tagged with the paper they came from), so
+    this is a pure lookup — no model call, no cost. Concepts the learner hasn't covered
+    come first, since those are the ones worth asking about.
+    """
+    uid = learner(x_device_id)
+    ids = [s for s in sources.split(",") if s]
+    _, titles = _pick_sources(ids or None, uid)
+    tset = set(titles)
+    hits = [n for n in NODES if tset & set(n.get("sources") or [])] or NODES
+    known = set(MASTERY.get_mastery(uid) or {})
+    hits.sort(key=lambda n: n["id"] in known)  # 아직 안 배운 개념 먼저
+    out = [f"{n['label'].split(' /')[0]}에 대해 설명해줘" for n in hits[:3]]
+    # 두 개념을 잇는 질문 하나 — 이 앱의 목적이 "연결해서 배우기"라서
+    ids_in = {n["id"] for n in hits}
+    link = next((e for e in EDGES if e["source"] in ids_in and e["target"] in ids_in
+                 and e["source"] != e["target"]), None)
+    if link:
+        a, b = NODE_BY_ID.get(link["source"]), NODE_BY_ID.get(link["target"])
+        if a and b:
+            out.append(f"{a['label'].split(' /')[0]}와(과) {b['label'].split(' /')[0]}는 어떻게 연결되나?")
+    return {"suggestions": out[:4], "from_sources": len(tset)}
 
 
 @app.delete("/corpus/{sid}")

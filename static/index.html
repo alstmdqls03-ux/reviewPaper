@@ -205,6 +205,27 @@
   .modalcard input[type=file] { width: 100%; font-size: 12px; margin-bottom: 12px; color: var(--on-mute); }
   .modalrow { display: flex; gap: 8px; justify-content: flex-end; }
   #upstatus { font-size: 12px; color: var(--on-mute); margin-top: 10px; }
+  /* --- 원문 뷰어 --- */
+  .viewer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); z-index: 25;
+            background: var(--canvas-soft); border-left: 1px solid var(--border);
+            display: none; flex-direction: column; }
+  .viewer.open { display: flex; }
+  .vhead { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--hairline); }
+  .vtitle { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; color: var(--on); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vnav { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .vnav #vpage { font-size: 11px; color: var(--on-mute); min-width: 62px; text-align: center; text-transform: uppercase; letter-spacing: .8px; }
+  .vbtn { padding: 8px 12px; min-width: 40px; font-size: 15px; }
+  #vbody { flex: 1; overflow-y: auto; padding: 18px; font-size: 14px; line-height: 1.75; color: var(--on-mute); white-space: pre-wrap; word-break: break-word; }
+  #vbody mark { background: var(--on); color: var(--canvas); padding: 1px 2px; border-radius: 3px; }
+  .vnote { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .8px; padding: 0 18px 10px; }
+  .srcopen { flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-faint); cursor: pointer; border-bottom: 1px solid var(--hairline); }
+  .srcopen:hover { color: var(--on); border-bottom-color: var(--on); }
+  /* 인용 각주 호버 미리보기 */
+  #citepop { position: fixed; z-index: 40; max-width: 380px; display: none; padding: 10px 13px;
+             background: var(--canvas-soft); border: 1px solid var(--border); border-radius: var(--radius-sm);
+             font-size: 12px; line-height: 1.6; color: var(--on-mute); box-shadow: 0 6px 24px rgba(0,0,0,.6); }
+  #citepop.show { display: block; }
+  #citepop b { display: block; color: var(--on); font-size: 11px; text-transform: uppercase; letter-spacing: .7px; margin-bottom: 5px; }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--canvas-soft); color: var(--on); border: 1px solid var(--hairline); padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13px; opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 30; }
   #toast.show { opacity: .98; }
   #masterylegend { position: absolute; bottom: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--on-mute); background: rgba(10,10,10,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); line-height: 1.9; }
@@ -427,9 +448,24 @@
   </div>
 </div>
 
+<!-- 원문 뷰어 (인용 -> 그 페이지의 추출 텍스트, 인용 구절 하이라이트) -->
+<div id="viewer" class="viewer" role="dialog" aria-modal="true" aria-label="원문 보기">
+  <div class="vhead">
+    <div class="vtitle" id="vtitle"></div>
+    <div class="vnav">
+      <button type="button" class="ghostbtn vbtn" id="vprev" aria-label="이전 쪽">‹</button>
+      <span id="vpage"></span>
+      <button type="button" class="ghostbtn vbtn" id="vnext" aria-label="다음 쪽">›</button>
+      <button type="button" class="ghostbtn" id="vclose">닫기</button>
+    </div>
+  </div>
+  <div id="vbody"></div>
+</div>
+<div id="citepop" role="tooltip"></div>
 <div id="toast"></div>
 <script>
-const SUGGESTIONS = [
+// 선택한 소스에서 뽑은 추천 질문이 오기 전까지 쓰는 기본값.
+let SUGGESTIONS = [
   "EM 이미지 딥러닝 세그멘테이션 정확도를 좌우하는 요인은?",
   "왜 딥러닝 세그멘테이션이 이미징 조건·메타데이터 기록에 의존하나?",
   "메타데이터 표준(FAIR)이 재현성에 왜 필요한가?",
@@ -450,12 +486,27 @@ const ONBOARD = `<div class="empty onboard">
   <div class="ob-hint">아래 추천 질문으로 시작해보세요 ↓</div>
 </div>`;
 log.innerHTML = ONBOARD;
-SUGGESTIONS.forEach(s => {
-  const el = document.createElement('span');
-  el.textContent = s;
-  el.onclick = () => { document.getElementById('q').value = s; send(); };
-  suggest.appendChild(el);
-});
+function renderSuggestions(){
+  suggest.innerHTML = '';
+  SUGGESTIONS.forEach(s => {
+    const el = document.createElement('span');
+    el.textContent = s;
+    el.onclick = () => { document.getElementById('q').value = s; send(); };
+    suggest.appendChild(el);
+  });
+}
+renderSuggestions();
+
+// 추천 질문은 "지금 체크된 소스"에서 뽑는다 — 소스를 바꾸면 질문도 바뀐다.
+async function refreshSuggestions(){
+  try {
+    const ids = (typeof SOURCES !== 'undefined' && SOURCES.length) ? selectedIds() : [];
+    const r = await fetch('/suggestions?sources=' + encodeURIComponent(ids.join(',')), { headers: hdr() });
+    if(!r.ok) return;
+    const d = await r.json();
+    if(d.suggestions && d.suggestions.length){ SUGGESTIONS = d.suggestions; renderSuggestions(); }
+  } catch(e){ /* 기본 추천을 그대로 쓴다 */ }
+}
 
 // ---- Tabs + hash router (안정 URL: /#/chat, /#/chat/{conv_id}, /#/graph/{concept} …) ----
 const ROUTES = ['chat', 'sources', 'graph', 'study', 'notes', 'history'];
@@ -582,15 +633,33 @@ function newBotBubble(){
   log.appendChild(wrap); log.scrollTop = log.scrollHeight;
   let html = '', n = 0;
   let plain = '', firstCite = null, concepts = [];
+  const cites = {};   // n -> citation payload (뷰어/미리보기가 참조)
   const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60;
   noteBtn.onclick = () => saveNote(plain, firstCite, concepts[0] || null, noteBtn);
   // C-b: click a source row to expand its cited passage; click an inline [n] to jump+expand.
-  srcBox.onclick = e => { const row = e.target.closest('.srcrow'); if(row) row.classList.toggle('open'); };
+  srcBox.onclick = e => {
+    const open = e.target.closest('.srcopen');
+    if(open){
+      e.stopPropagation();
+      const c = cites[open.closest('.srcrow').dataset.n] || {};
+      openViewer(c.source_id, c.start_page || 1, c.cited_text || '');
+      return;
+    }
+    const row = e.target.closest('.srcrow'); if(row) row.classList.toggle('open');
+  };
   bubble.onclick = e => {
     const s = e.target.closest('.cite'); if(!s) return;
     const row = srcBox.querySelector('.srcrow[data-n="'+s.dataset.n+'"]');
     if(row){ row.classList.add('open'); row.scrollIntoView({block:'nearest', behavior:'smooth'}); }
+    const c = cites[s.dataset.n];
+    if(c && c.source_id) openViewer(c.source_id, c.start_page || 1, c.cited_text || '');
   };
+  // 호버하면 그 인용의 제목·쪽·구절을 바로 보여준다 (펼치러 내려가지 않아도 되게)
+  bubble.addEventListener('mouseover', e => {
+    const s = e.target.closest('.cite'); if(!s) return;
+    const c = cites[s.dataset.n]; if(c) showCitePop(s, c);
+  });
+  bubble.addEventListener('mouseout', e => { if(e.target.closest('.cite')) hideCitePop(); });
   return {
     // "사용한 소스" — 이 답변이 실제로 읽은 논문 목록 (체크된 소스와 일치)
     usedSources(titles){
@@ -609,16 +678,18 @@ function newBotBubble(){
     },
     citation(c){
       n++;
+      cites[n] = c;
       if(!firstCite) firstCite = c.title || null;
       const page = c.start_page ? `p.${c.start_page}${c.end_page && c.end_page!==c.start_page ? '–'+c.end_page : ''}` : '';
-      const tip = `${c.title||''} ${page}\n클릭하면 원문 구절이 펼쳐져요`;
+      const tip = `${c.title||''} ${page}\n클릭하면 원문 쪽이 열려요`;
       html += `<sup class="cite" data-n="${n}" title="${esc(tip)}">[${n}]</sup>`;
       bubble.innerHTML = html; bubble.classList.add('cursor');
       const row = document.createElement('div');
       row.className = 'srcrow'; row.dataset.n = n;
       const passage = (c.cited_text||'').trim();
       row.innerHTML = `<div class="srchead"><span>[${n}] ${esc(`${c.title||''} ${page}`.trim())}</span>`+
-        (passage?`<span class="srctoggle">원문 보기</span>`:'')+`</div>`+
+        (c.source_id?`<span class="srcopen">원문 쪽 열기</span>`:'')+
+        (passage?`<span class="srctoggle">구절 보기</span>`:'')+`</div>`+
         (passage?`<div class="passage">“${esc(passage)}”</div>`:'');
       srcBox.appendChild(row); srcBox.style.display='';
     },
@@ -1072,6 +1143,79 @@ async function refreshMastery(){
   } catch(e){ /* non-fatal */ }
 }
 
+// ---- 원문 뷰어: 인용 -> 그 페이지의 추출 텍스트 + 인용 구절 하이라이트 ----
+const viewerEl = document.getElementById('viewer');
+let VIEW = { sid: null, page: 1, total: 0, quote: '' };
+
+const normWs = s => (s || '').replace(/\s+/g, ' ').trim();
+
+// 인용문(cited_text)은 모델이 PDF에서 읽은 것이고, 뷰어 텍스트는 pypdf 추출본이라
+// 글자가 정확히 일치하지 않는다. 앞에서부터 조금씩 짧게 잘라가며 겹치는 구간을 찾는다.
+function findQuote(text, quote){
+  const T = text, Q = normWs(quote).replace(/^[.…\s]+|[.…\s]+$/g, '');
+  if(!Q) return null;
+  for(let len = Q.length; len >= 20; len = Math.floor(len * 0.7)){
+    const i = T.indexOf(Q.slice(0, len));
+    if(i !== -1) return [i, i + len];
+  }
+  return null;
+}
+
+async function openViewer(sid, page, quote){
+  if(!sid){ toast('이 인용은 원문 위치를 알 수 없어요'); return; }
+  VIEW = { sid, page: page || 1, total: 0, quote: quote || VIEW.quote };
+  viewerEl.classList.add('open');
+  document.getElementById('vbody').innerHTML = '<div class="empty">불러오는 중…</div>';
+  await loadViewerPage();
+  document.getElementById('vclose').focus();
+}
+
+async function loadViewerPage(){
+  const body = document.getElementById('vbody');
+  try {
+    const r = await fetch(`/corpus/${encodeURIComponent(VIEW.sid)}/page/${VIEW.page}`, { headers: hdr() });
+    if(!r.ok){ body.innerHTML = `<div class="empty">${esc(await errText(r, '원문을 불러오지 못했어요'))}</div>`; return; }
+    const d = await r.json();
+    VIEW.total = d.total_pages;
+    document.getElementById('vtitle').textContent = d.title;
+    document.getElementById('vpage').textContent = `${d.page} / ${d.total_pages}쪽`;
+    document.getElementById('vprev').disabled = d.page <= 1;
+    document.getElementById('vnext').disabled = d.page >= d.total_pages;
+    const text = normWs(d.text) || '(이 쪽에서 추출된 텍스트가 없어요 — 이미지만 있는 쪽일 수 있어요)';
+    const hit = findQuote(text, VIEW.quote);
+    body.innerHTML = hit
+      ? esc(text.slice(0, hit[0])) + '<mark>' + esc(text.slice(hit[0], hit[1])) + '</mark>' + esc(text.slice(hit[1]))
+      : esc(text);
+    if(VIEW.quote && !hit){
+      body.insertAdjacentHTML('afterbegin',
+        '<div class="vnote">인용 구절을 이 쪽에서 그대로 찾지 못했어요 (추출 텍스트와 표기가 다를 수 있어요)</div>');
+    }
+    const m = body.querySelector('mark');
+    if(m) m.scrollIntoView({ block:'center' }); else body.scrollTop = 0;
+  } catch(e){ body.innerHTML = '<div class="empty">원문을 불러오지 못했어요.</div>'; }
+}
+
+function closeViewer(){ viewerEl.classList.remove('open'); }
+document.getElementById('vclose').onclick = closeViewer;
+document.getElementById('vprev').onclick = () => { if(VIEW.page > 1){ VIEW.page--; loadViewerPage(); } };
+document.getElementById('vnext').onclick = () => { if(VIEW.page < VIEW.total){ VIEW.page++; loadViewerPage(); } };
+document.addEventListener('keydown', e => { if(e.key === 'Escape' && viewerEl.classList.contains('open')) closeViewer(); });
+
+// ---- 각주 호버 미리보기 ----
+const citePop = document.getElementById('citepop');
+function showCitePop(el, c){
+  const page = c.start_page ? `p.${c.start_page}${c.end_page && c.end_page !== c.start_page ? '–'+c.end_page : ''}` : '';
+  const quote = (c.cited_text || '').trim();
+  citePop.innerHTML = `<b>${esc(`${c.title||''} ${page}`.trim())}</b>` +
+    (quote ? `“${esc(quote.slice(0, 300))}${quote.length > 300 ? '…' : ''}”` : '(인용 구절 없음)') +
+    (c.source_id ? '<b style="margin:6px 0 0">클릭하면 원문 쪽이 열려요</b>' : '');
+  citePop.classList.add('show');
+  const r = el.getBoundingClientRect(), p = citePop.getBoundingClientRect();
+  citePop.style.left = Math.max(8, Math.min(r.left, innerWidth - p.width - 8)) + 'px';
+  citePop.style.top = (r.top > p.height + 12 ? r.top - p.height - 8 : r.bottom + 8) + 'px';
+}
+function hideCitePop(){ citePop.classList.remove('show'); }
+
 // ---- 소스 목록 + 선택 ----
 let SOURCES = [];  // [{id, title, mine, added_at}] as returned by GET /corpus
 let SRC_MAX = 0;   // 사용자당 업로드 상한 (서버 설정)
@@ -1103,6 +1247,7 @@ async function loadSources(){
       if(fresh.length) setSelected([...sel, ...fresh]);
     }
     renderSources();
+    refreshSuggestions();
   } catch(e){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; }
 }
 
@@ -1164,6 +1309,7 @@ function onSourceToggle(){
     .filter(r => r.querySelector('input').checked).map(r => r.dataset.id);
   setSelected(ids);
   renderSources();
+  refreshSuggestions();
 }
 
 // 인라인 이름 바꾸기: 제목을 입력창으로 바꾸고 Enter 저장 / Esc 취소.
@@ -1216,7 +1362,7 @@ async function errText(r, fallback){
 document.getElementById('sourcesopen').onclick = () => navigate('sources');
 document.getElementById('srcclose').onclick = () => navigate('chat', getConv() || '');
 document.getElementById('srcadd').onclick = () => { document.getElementById('uploadopen').click(); };
-document.getElementById('srcall').onclick = () => { setSelected(SOURCES.map(s=>s.id)); renderSources(); };
+document.getElementById('srcall').onclick = () => { setSelected(SOURCES.map(s=>s.id)); renderSources(); refreshSuggestions(); };
 document.getElementById('srcnone').onclick = () => { setSelected([]); renderSources(); };
 document.getElementById('srcsort').onchange = renderSources;
 loadSources();
@@ -1462,7 +1608,7 @@ async function resumeConversation(id, title){
     log.innerHTML = '';
     (d.messages || []).forEach(m => {
       if(m.role === 'user') addUser(m.content || '');
-      else addBotPlain(m.content || ''); // plain replay: no citations/mastery/graph side effects
+      else addBotReplay(m.content || '', m.meta);   // 각주·사용한 소스까지 복원
     });
     if(!(d.messages || []).length) log.innerHTML = '<div class="empty">빈 대화입니다.</div>';
     document.getElementById('quizbar').style.display = 'none';
@@ -1470,11 +1616,14 @@ async function resumeConversation(id, title){
   } catch(e){ toast('대화를 불러오지 못했어요'); }
 }
 
-// Plain bot bubble for replayed history (no streaming, citations, notes, or side effects).
-function addBotPlain(text){
-  const wrap = document.createElement('div'); wrap.className = 'msg bot';
-  wrap.innerHTML = `<div class="bubble">${esc(text)}</div>`;
-  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+// 저장된 답변을 다시 그린다. 스트리밍이 아니라 각주 위치를 문장 안에 되돌릴 수는 없어서
+// 각주는 답변 끝에 모아 붙는다 — 출처 행과 원문 열기는 실시간 답변과 똑같이 동작한다.
+function addBotReplay(text, meta){
+  const bot = newBotBubble();
+  if(meta && meta.sources) bot.usedSources(meta.sources);
+  if(text) bot.text(text);
+  ((meta && meta.citations) || []).forEach(c => bot.citation(c));
+  bot.done([]);
 }
 
 async function deleteConversation(id){

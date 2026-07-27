@@ -73,8 +73,45 @@ def test_uploads_are_private_to_their_owner():
         json.loads(corpus._CORPUS.read_text())
 
 
+def test_source_page_and_suggestions():
+    """v5: 원문 뷰어가 읽는 페이지 텍스트와, 선택에서 파생되는 추천 질문."""
+    import asyncio
+    import app
+    from fastapi import HTTPException
+
+    reg = corpus.load_corpus()
+    sid = reg[2]["id"]  # 가장 작은 시드 논문
+    page = asyncio.run(app.source_page(sid, 1, x_device_id="testdev"))
+    assert page["page"] == 1 and page["total_pages"] > 1, page
+    assert page["text"].strip(), "first page extracted no text"
+    assert page["title"] == reg[2]["title"]
+
+    for bad in [(sid, 0), (sid, page["total_pages"] + 1)]:
+        try:
+            asyncio.run(app.source_page(*bad, x_device_id="testdev"))
+            raise AssertionError(f"out-of-range page {bad[1]} should 404")
+        except HTTPException as e:
+            assert e.status_code == 404
+
+    try:  # a source id that isn't visible must 404, not leak
+        asyncio.run(app.source_page("deadbeefdead", 1, x_device_id="testdev"))
+        raise AssertionError("unknown source should 404")
+    except HTTPException as e:
+        assert e.status_code == 404
+
+    # suggestions: narrowing the selection narrows the questions
+    wide = asyncio.run(app.suggestions(sources="", x_device_id="testdev"))
+    narrow = asyncio.run(app.suggestions(sources=sid, x_device_id="testdev"))
+    assert 1 <= len(wide["suggestions"]) <= 4, wide
+    assert 1 <= len(narrow["suggestions"]) <= 4, narrow
+    assert narrow["from_sources"] == 1 and wide["from_sources"] == len(reg)
+    assert all(s.strip().endswith("?") or "설명해줘" in s for s in narrow["suggestions"]), narrow
+    print(f"viewer+suggestions ok: {page['total_pages']} pages, {len(narrow['suggestions'])} questions")
+
+
 if __name__ == "__main__":
     test_ids_stable_and_unique()
     test_selection_narrows_titles()
     test_uploads_are_private_to_their_owner()
+    test_source_page_and_suggestions()
     print("all source self-checks passed")

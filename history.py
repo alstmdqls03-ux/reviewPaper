@@ -4,6 +4,7 @@ Stdlib only. Time-dependent methods take an injectable `now` (float epoch) for t
 Opens the shared production db (app.db) — same file as accounts.py, NOT mastery.db.
 """
 
+import json
 import sqlite3
 import time
 import uuid
@@ -33,6 +34,11 @@ class History:
             );
             """
         )
+        # meta = JSON sidecar per message (citations, used sources). Added after the
+        # table shipped, so migrate in place rather than dropping anyone's history.
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(messages)")}
+        if "meta" not in cols:
+            self.db.execute("ALTER TABLE messages ADD COLUMN meta TEXT")
         self.db.commit()
 
     def start_conversation(self, user_id, title="", now=None):
@@ -46,13 +52,15 @@ class History:
         self.db.commit()
         return conv_id
 
-    def append(self, conv_id, role, content, now=None):
-        """Add a message, bump updated_at; auto-title from first user message if empty."""
+    def append(self, conv_id, role, content, now=None, meta=None):
+        """Add a message, bump updated_at; auto-title from first user message if empty.
+        `meta` is any JSON-able dict (citations, used sources) replayed with the message."""
         now = time.time() if now is None else now
         msg_id = uuid.uuid4().hex
         self.db.execute(
-            "INSERT INTO messages(id,conv_id,role,content,created_at) VALUES(?,?,?,?,?)",
-            (msg_id, conv_id, role, content, now),
+            "INSERT INTO messages(id,conv_id,role,content,created_at,meta) VALUES(?,?,?,?,?,?)",
+            (msg_id, conv_id, role, content, now,
+             json.dumps(meta, ensure_ascii=False) if meta else None),
         )
         conv = self.db.execute(
             "SELECT title FROM conversations WHERE id=?", (conv_id,)
@@ -89,14 +97,21 @@ class History:
         ]
 
     def get_messages(self, conv_id):
-        return [
-            {"role": r["role"], "content": r["content"], "created_at": r["created_at"]}
-            for r in self.db.execute(
-                "SELECT role,content,created_at FROM messages WHERE conv_id=? "
-                "ORDER BY created_at, id",
-                (conv_id,),
-            )
-        ]
+        out = []
+        for r in self.db.execute(
+            "SELECT role,content,created_at,meta FROM messages WHERE conv_id=? "
+            "ORDER BY created_at, id",
+            (conv_id,),
+        ):
+            meta = None
+            if r["meta"]:
+                try:
+                    meta = json.loads(r["meta"])
+                except ValueError:  # corrupt sidecar must not sink the whole replay
+                    meta = None
+            out.append({"role": r["role"], "content": r["content"],
+                        "created_at": r["created_at"], "meta": meta})
+        return out
 
     def get_title(self, conv_id):
         """The conversation's title, or "" if it has none / doesn't exist."""
@@ -129,7 +144,10 @@ if __name__ == "__main__":
 
     conv = h.start_conversation("userA", now=t0)
     h.append(conv, "user", "TEM과 SEM의 차이가 뭐야? 초보자용으로 설명해줘", now=t0 + 1)
-    h.append(conv, "assistant", "좋은 질문이에요! ...", now=t0 + 2)
+    h.append(conv, "assistant", "좋은 질문이에요! ...", now=t0 + 2,
+             meta={"citations": [{"title": "Paper A", "start_page": 3,
+                                  "cited_text": "TEM transmits..."}],
+                   "sources": ["Paper A", "Paper B"]})
 
     lst = h.list_conversations("userA")
     assert len(lst) == 1
@@ -141,6 +159,16 @@ if __name__ == "__main__":
 
     assert h.get_title(conv) == lst[0]["title"], h.get_title(conv)
     assert h.get_title("no-such-conversation") == ""
+
+    # meta survives the round trip so replayed answers keep their footnotes
+    assert msgs[0]["meta"] is None, "user messages carry no meta"
+    assert msgs[1]["meta"]["citations"][0]["start_page"] == 3, msgs[1]["meta"]
+    assert msgs[1]["meta"]["sources"] == ["Paper A", "Paper B"]
+    # a pre-migration row (meta NULL) still replays
+    h.db.execute("INSERT INTO messages(id,conv_id,role,content,created_at) VALUES(?,?,?,?,?)",
+                 ("old1", conv, "assistant", "legacy answer", t0 + 3))
+    h.db.commit()
+    assert h.get_messages(conv)[-1]["meta"] is None
 
     # isolation: another user sees nothing
     assert h.list_conversations("userB") == []
