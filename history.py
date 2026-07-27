@@ -44,6 +44,14 @@ class History:
                 id TEXT PRIMARY KEY, conv_id TEXT, role TEXT, content TEXT,
                 created_at REAL
             );
+            -- 여기까지 PK 자동 인덱스뿐이었다. 아래 둘은 이 앱의 두 핫패스와 정확히 같은 모양이다:
+            --   get_messages/search: WHERE conv_id=? ORDER BY created_at, id
+            --   list_conversations : WHERE user_id=? AND deleted=0 ORDER BY updated_at DESC, id
+            -- 특히 search()는 대화마다 messages 서브쿼리를 두 번 돈다 — 인덱스 없이는 N×풀스캔.
+            CREATE INDEX IF NOT EXISTS idx_messages_conv
+                ON messages(conv_id, created_at, id);
+            CREATE INDEX IF NOT EXISTS idx_conversations_user
+                ON conversations(user_id, deleted, updated_at DESC, id);
             """
         )
         # meta = JSON sidecar per message (citations, used sources). Added after the

@@ -49,6 +49,13 @@ class MasteryStore:
                 id TEXT PRIMARY KEY, device_id TEXT, concept_id TEXT,
                 correct INTEGER, created_at REAL
             );
+            -- 인덱스는 반드시 테이블 뒤에. executescript는 순서대로 실행하므로
+            -- 앞에 두면 빈 DB에서 "no such table"로 죽는다.
+            -- mastery는 PK(device_id, concept_id)의 왼쪽 접두사가 WHERE device_id=? 를 이미 탄다.
+            -- notes/quiz_attempts는 PK가 id라 학습자별 조회가 풀스캔이었다 —
+            -- dashboard() 한 번이 quiz_attempts를 두 번 훑는다(정답률 + streak).
+            CREATE INDEX IF NOT EXISTS idx_notes_device ON notes(device_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_quiz_device ON quiz_attempts(device_id, created_at);
             """
         )
         self.db.commit()

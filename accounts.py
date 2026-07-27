@@ -36,6 +36,8 @@ class Accounts:
             CREATE TABLE IF NOT EXISTS devices(
                 device_id TEXT PRIMARY KEY, user_id TEXT, linked_at REAL
             );
+            -- list_devices: WHERE user_id=? ORDER BY linked_at (PK는 device_id라 역방향은 못 탄다)
+            CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id, linked_at);
             """
         )
         self.db.commit()
