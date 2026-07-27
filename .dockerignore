@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+.git
+.github
+*.db
+text_cache/
+uploads/
+.playwright-mcp/
+*.png
+file_cache.json
+corpus.json
+.env
+node_modules

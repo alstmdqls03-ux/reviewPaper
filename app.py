@@ -1,0 +1,432 @@
+"""Review-paper study chatbot — production backend.
+
+Long-context RAG (no vector DB by default): review papers live in Claude's context via
+the Files API; answers are grounded with native page-level citations, streamed over SSE.
+On top of the chat:
+  - sessions (in-memory) give multi-turn context and gate quizzes
+  - W2 learning depth : per-device concept mastery, spaced-repetition quizzes, notes/export
+  - W3 corpus         : growable corpus + user PDF upload + BM25 hybrid doc selection
+  - W4 observability  : structured request logging + /metrics
+  - production layer  : accounts, resumable persisted conversations (SQLite), rate limiting,
+                        request validation, health/readiness, admin analytics, Docker
+
+Runs fully offline in MOCK mode (MOCK_LLM=1).
+
+    MOCK_LLM=1 python app.py      # offline demo
+    python app.py                 # real, needs ANTHROPIC_API_KEY
+"""
+import json
+import math
+import time
+import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+import corpus
+import llm
+import mastery
+import obs
+import papers
+from accounts import Accounts
+from analytics import Analytics
+from config import settings
+from history import History
+from limits import RateLimiter, check_message, check_upload_size
+from session import SessionStore, match_concepts
+
+SYSTEM = (
+    "You help a new electron-microscopy researcher study a corpus of review papers. "
+    "Answer only from the attached papers. Be concise and concrete. When a concept connects "
+    "to related concepts across the papers, say so explicitly so the reader can learn by "
+    "following the links — that is the point of this tool. If the papers don't cover something, say so."
+)
+
+store = SessionStore(ttl=settings.SESSION_TTL)
+MASTERY = mastery.MasteryStore()
+ACCOUNTS = Accounts()
+HIST = History()
+ANALYTICS = Analytics()
+METRICS = obs.Metrics()
+RL = RateLimiter(settings.RATE_LIMIT, settings.RATE_WINDOW)
+_GRAPH = json.loads(Path("graph.json").read_text())
+NODES, EDGES = _GRAPH["nodes"], _GRAPH["edges"]
+NODE_BY_ID = {n["id"]: n for n in NODES}
+UPLOADS = Path("uploads")
+_uploaded: list = []
+_conv_of: dict = {}  # session_id -> persisted conversation_id
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _uploaded
+    if not llm.MOCK:
+        _uploaded = _upload_corpus(papers.client())
+        print(f"papers ready: {len(_uploaded)} documents")
+    else:
+        print("MOCK mode: no papers uploaded, canned LLM responses")
+    yield
+
+
+def _upload_corpus(c):
+    reg = corpus.corpus_papers()
+    orig = papers.PAPERS
+    try:
+        papers.PAPERS = reg
+        return papers.ensure_uploaded(c)
+    finally:
+        papers.PAPERS = orig
+
+
+app = FastAPI(lifespan=lifespan)
+
+_NO_LIMIT = ("/healthz", "/readyz", "/metrics")
+
+
+@app.middleware("http")
+async def gate(request: Request, call_next):
+    # Rate-limit expensive mutations (POST); reads and health checks pass through.
+    if request.method != "GET" and not request.url.path.startswith(_NO_LIMIT):
+        key = request.headers.get("X-Device-Id") or (request.client.host if request.client else "anon")
+        if not RL.allow(key):
+            ra = str(int(math.ceil(RL.retry_after(key))))
+            return JSONResponse({"detail": "요청이 너무 잦아요. 잠시 후 다시 시도해 주세요."},
+                                status_code=429, headers={"Retry-After": ra})
+    rid = uuid.uuid4().hex[:8]
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    dt = (time.perf_counter() - t0) * 1000
+    METRICS.record(request_id=rid, path=request.url.path, session_id="",
+                   latency_ms=dt, status=response.status_code, est_cost_usd=0.0)
+    obs.log_line(event="request", request_id=rid, path=request.url.path,
+                 status=response.status_code, latency_ms=round(dt, 1))
+    return response
+
+
+def dev(x_device_id: str | None) -> str:
+    return x_device_id or "anon"
+
+
+def learner(x_device_id: str | None) -> str:
+    """Storage key for learning progress = the ACCOUNT (user_id), not the raw device.
+    So progress follows the account across devices/browsers once they're linked."""
+    return ACCOUNTS.resolve(dev(x_device_id))
+
+
+def _doc_blocks_for(query: str, citations: bool, cache_last: bool) -> list:
+    if not _uploaded:
+        return []
+    sel = corpus.select_documents(query, _uploaded)
+    return papers.document_blocks(sel, citations=citations, cache_last=cache_last)
+
+
+class ChatIn(BaseModel):
+    session_id: str | None = None
+    conversation_id: str | None = None
+    message: str
+
+
+class QuizIn(BaseModel):
+    session_id: str
+
+
+class GradeIn(BaseModel):
+    session_id: str
+    quiz_id: str
+    answers: list[int]
+
+
+class NoteIn(BaseModel):
+    text: str
+    source: str = ""
+    concept_id: str = ""
+
+
+class NameIn(BaseModel):
+    name: str
+
+
+class ClaimIn(BaseModel):
+    token: str
+
+
+class MarkIn(BaseModel):
+    concept_id: str
+    known: bool = True
+
+
+def _build_messages(sess, doc_blocks: list, new_text: str) -> list:
+    turns = sess.messages + [{"role": "user", "content": new_text}]
+    msgs = [{"role": t["role"], "content": t["content"]} for t in turns]
+    for m in msgs:
+        if m["role"] == "user":
+            m["content"] = list(doc_blocks) + [{"type": "text", "text": m["content"]}]
+            break
+    return msgs
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+
+@app.post("/chat")
+async def chat(body: ChatIn, x_device_id: str = Header(None)):
+    try:
+        message = check_message(body.message, settings.MAX_MESSAGE_CHARS)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    sess = store.get_or_create(body.session_id)
+    device = dev(x_device_id)
+    user_id = ACCOUNTS.resolve(device)
+    conv_id = body.conversation_id
+    if not conv_id:
+        conv_id = HIST.start_conversation(user_id)
+    elif not sess.messages:  # resuming a persisted conversation: rehydrate live context
+        sess.messages = [{"role": m["role"], "content": m["content"]}
+                         for m in HIST.get_messages(conv_id)]
+        for m in sess.messages:  # restore turn count + covered concepts so quiz gating survives resume
+            if m["role"] == "assistant":
+                sess.turns += 1
+                sess.covered_concepts |= set(match_concepts(m["content"], NODES))
+    _conv_of[sess.id] = conv_id
+
+    async def gen():
+        yield _sse({"type": "session", "session_id": sess.id, "conversation_id": conv_id})
+        parts, citations = [], []
+        async with sess.lock:
+            try:
+                doc_blocks = _doc_blocks_for(message, citations=True, cache_last=True)
+                messages = _build_messages(sess, doc_blocks, message)
+                async for kind, payload in llm.stream_chat(messages, SYSTEM):
+                    if kind == "text":
+                        parts.append(payload)
+                        yield _sse({"type": "text", "text": payload})
+                    elif kind == "usage":  # real-mode token cost -> /metrics (MOCK never emits this)
+                        METRICS.add_cost("/chat", obs.estimate_cost(
+                            payload["input_tokens"], payload["output_tokens"],
+                            model=settings.MODEL, cache_read_tokens=payload.get("cache_read_tokens", 0)))
+                    else:
+                        citations.append(payload)
+                        yield _sse({"type": "citation", "citation": payload})
+                answer = "".join(parts)
+                concepts = match_concepts(answer, NODES)
+                sess.add_user(message)
+                sess.add_assistant(answer, concepts)
+                MASTERY.record_covered(user_id, concepts)
+                HIST.append(conv_id, "user", message)
+                HIST.append(conv_id, "assistant", answer)
+                yield _sse({"type": "done", "concepts": concepts,
+                            "quiz_available": sess.quiz_available, "turns": sess.turns})
+            except Exception as e:
+                yield _sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/quiz")
+async def quiz(body: QuizIn, x_device_id: str = Header(None)):
+    sess = store.get_or_create(body.session_id)
+    if not sess.quiz_available:
+        raise HTTPException(400, "아직 퀴즈를 낼 만큼 대화하지 않았어요. 조금 더 대화해 주세요.")
+    device = learner(x_device_id)
+    covered = [cid for cid in sess.covered_concepts if cid in NODE_BY_ID]
+    order = MASTERY.due_concepts(device, covered)  # spaced repetition: weak/due first
+    covered.sort(key=lambda c: order.index(c) if c in order else len(order))
+    infos = [NODE_BY_ID[cid] for cid in covered]
+    quiz_docs = papers.document_blocks(_uploaded, citations=False, cache_last=True) if _uploaded else []
+    async with sess.lock:
+        questions = await llm.make_quiz(quiz_docs, infos)
+    quiz_id = sess.add_quiz(questions)
+    public = [{"id": q["id"], "question": q["question"], "options": q["options"],
+               "concept_id": q.get("concept_id", ""), "source": q.get("source", "")}
+              for q in questions]
+    return {"quiz_id": quiz_id, "questions": public}
+
+
+@app.post("/quiz/grade")
+async def grade(body: GradeIn, x_device_id: str = Header(None)):
+    sess = store.get_or_create(body.session_id)
+    try:
+        result = sess.grade_quiz(body.quiz_id, body.answers)
+    except KeyError:
+        raise HTTPException(404, "quiz not found for this session")
+    MASTERY.record_quiz(learner(x_device_id),
+                        [{"concept_id": r["concept_id"], "correct": r["correct"]}
+                         for r in result["results"] if r.get("concept_id")])
+    return result
+
+
+@app.post("/session/reset")
+async def session_reset(body: QuizIn):
+    """Wipe the live session (chat/concepts/turns/quizzes), keeping the same id."""
+    store.get_or_create(body.session_id).reset()
+    _conv_of.pop(body.session_id, None)
+    return {"ok": True, "session_id": body.session_id}
+
+
+@app.get("/mastery")
+async def get_mastery(x_device_id: str = Header(None)):
+    device = learner(x_device_id)
+    return {"mastery": MASTERY.get_mastery(device),
+            "next_up": MASTERY.next_up(device, NODES, EDGES)}
+
+
+@app.get("/dashboard")
+async def dashboard(x_device_id: str = Header(None)):
+    """Phase 1 learning dashboard: the 7 metrics from 제안서 §02, MOCK-friendly."""
+    return MASTERY.dashboard(learner(x_device_id), NODES)
+
+
+@app.post("/mastery/mark")
+async def mark_mastery(body: MarkIn, x_device_id: str = Header(None)):
+    """User self-attests understanding of a concept -> promote/demote its mastery."""
+    return MASTERY.mark_known(learner(x_device_id), body.concept_id, body.known)
+
+
+@app.post("/notes")
+async def add_note(body: NoteIn, x_device_id: str = Header(None)):
+    return {"note_id": MASTERY.add_note(learner(x_device_id), body.text, body.source, body.concept_id)}
+
+
+@app.get("/notes")
+async def list_notes(x_device_id: str = Header(None)):
+    return {"notes": MASTERY.list_notes(learner(x_device_id))}
+
+
+@app.get("/notes/export")
+async def export_notes(x_device_id: str = Header(None)):
+    md = MASTERY.export_markdown(learner(x_device_id))
+    return PlainTextResponse(md, media_type="text/markdown",
+                             headers={"Content-Disposition": 'attachment; filename="notes.md"'})
+
+
+# ---- accounts + conversation history (persisted) ------------------------------
+@app.get("/account")
+async def account(x_device_id: str = Header(None)):
+    uid = ACCOUNTS.resolve(dev(x_device_id))
+    return {"account": ACCOUNTS.get(uid), "token": ACCOUNTS.issue_token(uid)}
+
+
+@app.post("/account/claim")
+async def account_claim(body: ClaimIn, x_device_id: str = Header(None)):
+    """Log this device into an existing account via its restore token.
+    Links the device to that account and folds this device's anonymous progress
+    into it, so learning follows the account across devices/browsers (Phase 2)."""
+    target = ACCOUNTS.verify_token(body.token.strip())
+    if not target or ACCOUNTS.get(target) is None:
+        raise HTTPException(400, "복원 코드가 올바르지 않아요.")
+    device = dev(x_device_id)
+    prev = ACCOUNTS.resolve(device)          # this device's current (anonymous) account
+    ACCOUNTS.link_device(target, device)     # repoint device -> claimed account
+    MASTERY.merge_learner(prev, target)      # carry anonymous progress in
+    return {"ok": True, "account": ACCOUNTS.get(target), "token": ACCOUNTS.issue_token(target)}
+
+
+@app.post("/account/name")
+async def set_name(body: NameIn, x_device_id: str = Header(None)):
+    uid = ACCOUNTS.resolve(dev(x_device_id))
+    ACCOUNTS.set_name(uid, body.name)
+    return {"ok": True, "account": ACCOUNTS.get(uid)}
+
+
+@app.get("/conversations")
+async def conversations(x_device_id: str = Header(None)):
+    uid = ACCOUNTS.resolve(dev(x_device_id))
+    return {"conversations": HIST.list_conversations(uid)}
+
+
+@app.get("/conversations/{conv_id}")
+async def conversation_messages(conv_id: str):
+    return {"messages": HIST.get_messages(conv_id)}
+
+
+@app.delete("/conversations/{conv_id}")
+async def delete_conversation(conv_id: str):
+    HIST.delete(conv_id)
+    return {"ok": True}
+
+
+# ---- corpus upload ------------------------------------------------------------
+@app.post("/upload")
+async def upload(file: UploadFile = File(...), title: str = Form(...)):
+    contents = await file.read()
+    try:
+        check_upload_size(len(contents), settings.MAX_UPLOAD_MB)
+    except ValueError as e:
+        raise HTTPException(413, str(e))
+    UPLOADS.mkdir(exist_ok=True)
+    dest = UPLOADS / file.filename
+    dest.write_bytes(contents)
+    corpus.add_pdf(str(dest), title)
+    corpus._reset_index()
+    regenerated = "skipped (mock or no key)"
+    if not llm.MOCK:
+        global _uploaded
+        _uploaded = _upload_corpus(papers.client())
+        regenerated = corpus.regenerate_graph()
+    return {"corpus_size": len(corpus.load_corpus()), "title": title, "regenerated": regenerated}
+
+
+# ---- ops: metrics, analytics, health ------------------------------------------
+@app.get("/metrics")
+def metrics():
+    return METRICS.summary()
+
+
+def _require_admin(x_admin_token: str | None):
+    if settings.ADMIN_TOKEN and x_admin_token != settings.ADMIN_TOKEN:
+        raise HTTPException(403, "admin token required")
+
+
+@app.get("/analytics")
+async def analytics(x_admin_token: str = Header(None)):
+    _require_admin(x_admin_token)
+    return ANALYTICS.summary()
+
+
+@app.get("/analytics/students")
+async def analytics_students(x_admin_token: str = Header(None)):
+    """Teacher/TA view: per-student progress + class averages (제안서 Phase 3).
+    Reuses the Phase-1 dashboard formulas per learner; the whole cohort is one class."""
+    _require_admin(x_admin_token)
+    metrics = ("progress_pct", "avg_score", "quiz_accuracy",
+               "learning_score", "concepts_learned", "streak_days")
+    students = []
+    for uid in MASTERY.all_learners():
+        d = MASTERY.dashboard(uid, NODES)
+        acct = ACCOUNTS.get(uid) or {}
+        students.append({"user_id": uid, "name": acct.get("display_name") or "익명",
+                         **{k: d[k] for k in metrics}, "quiz_attempts": d["quiz_attempts"]})
+    students.sort(key=lambda s: s["learning_score"], reverse=True)
+    n = len(students)
+    averages = {k: round(sum(s[k] for s in students) / n, 1) for k in metrics} if n else {}
+    return {"students": students, "class_average": averages, "student_count": n,
+            "total_concepts": len(NODES)}
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", **settings.summary()}
+
+
+@app.get("/readyz")
+def readyz():
+    ready = llm.MOCK or bool(_uploaded)
+    return JSONResponse({"ready": ready}, status_code=200 if ready else 503)
+
+
+@app.get("/graph")
+def graph():
+    return json.loads(Path("graph.json").read_text())
+
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")  # must be last
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

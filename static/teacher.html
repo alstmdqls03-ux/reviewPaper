@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>반 진척 뷰 — 교수/조교</title>
+<style>
+  :root { --bg:#111214; --soft:#191b1e; --hair:#2a2d31; --on:#f2f3f5; --mute:#a7abb2; --faint:#71767d; --accent:#8ab4ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--on); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:32px 20px 60px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--faint); font-size:13px; margin-bottom:24px; }
+  .bar { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
+  input { flex:1; min-width:200px; padding:10px 12px; background:var(--soft); border:1px solid var(--hair); border-radius:8px; color:var(--on); font-size:14px; }
+  button { padding:10px 16px; background:var(--on); color:var(--bg); border:0; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
+  button:hover { opacity:.9; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:20px; }
+  .card { background:var(--soft); border:1px solid var(--hair); border-radius:10px; padding:14px; }
+  .card b { display:block; font-size:24px; }
+  .card span { font-size:11px; color:var(--mute); text-transform:uppercase; letter-spacing:.5px; }
+  .tablewrap { overflow-x:auto; border:1px solid var(--hair); border-radius:10px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; min-width:640px; }
+  th,td { padding:11px 14px; text-align:right; border-bottom:1px solid var(--hair); white-space:nowrap; }
+  th:first-child,td:first-child { text-align:left; }
+  th { color:var(--mute); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.5px; position:sticky; top:0; background:var(--soft); }
+  tr:last-child td { border-bottom:0; }
+  tbody tr:hover { background:var(--soft); }
+  .avgrow td { background:var(--soft); font-weight:700; border-top:2px solid var(--hair); }
+  .msg { color:var(--faint); font-size:13px; padding:24px 0; }
+  .rank { color:var(--faint); width:28px; }
+  code { color:var(--accent); font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>반 진척 뷰</h1>
+  <div class="sub">교수/조교용 — 학생별 학습 진척과 반 평균 · 관리자 토큰 필요(ADMIN_TOKEN)</div>
+  <div class="bar">
+    <input id="tok" type="password" placeholder="관리자 토큰 (ADMIN_TOKEN, 미설정 시 비워두기)" autocomplete="off">
+    <button id="go">불러오기</button>
+  </div>
+  <div id="cards" class="cards" style="display:none"></div>
+  <div id="out"><div class="msg">토큰을 입력하고 불러오기를 눌러주세요.</div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+function pct(v){ return v + '%'; }
+async function load(){
+  const tok = $('tok').value.trim();
+  $('out').innerHTML = '<div class="msg">불러오는 중…</div>';
+  let r;
+  try { r = await fetch('/analytics/students', { headers: tok ? {'X-Admin-Token': tok} : {} }); }
+  catch(e){ $('out').innerHTML = '<div class="msg">요청 실패</div>'; return; }
+  if(r.status === 403){ $('out').innerHTML = '<div class="msg">토큰이 올바르지 않습니다 (403).</div>'; $('cards').style.display='none'; return; }
+  if(!r.ok){ $('out').innerHTML = '<div class="msg">오류 ' + r.status + '</div>'; return; }
+  const d = await r.json();
+  const avg = d.class_average || {};
+  $('cards').style.display = 'grid';
+  $('cards').innerHTML =
+    card(d.student_count, '학생 수') +
+    card(pct(avg.progress_pct ?? 0), '반 평균 진척률') +
+    card(pct(avg.avg_score ?? 0), '반 평균 숙련도') +
+    card(pct(avg.quiz_accuracy ?? 0), '반 평균 정답률') +
+    card(avg.learning_score ?? 0, '반 평균 점수');
+  if(!d.students.length){ $('out').innerHTML = '<div class="msg">아직 학습 데이터가 있는 학생이 없습니다.</div>'; return; }
+  const rows = d.students.map((s,i) => `<tr>
+    <td><span class="rank">${i+1}</span> ${esc(s.name)} <code>${s.user_id.slice(0,6)}</code></td>
+    <td>${pct(s.progress_pct)}</td><td>${pct(s.avg_score)}</td>
+    <td>${s.quiz_attempts ? pct(s.quiz_accuracy) : '—'}</td>
+    <td>${s.concepts_learned}</td><td>${s.streak_days}일</td>
+    <td><b>${s.learning_score}</b></td></tr>`).join('');
+  const avgrow = `<tr class="avgrow"><td>반 평균</td>
+    <td>${pct(avg.progress_pct)}</td><td>${pct(avg.avg_score)}</td>
+    <td>${pct(avg.quiz_accuracy)}</td><td>${avg.concepts_learned}</td>
+    <td>${avg.streak_days}일</td><td>${avg.learning_score}</td></tr>`;
+  $('out').innerHTML = `<div class="tablewrap"><table>
+    <thead><tr><th>학생</th><th>진척률</th><th>숙련도</th><th>정답률</th><th>개념수</th><th>연속</th><th>점수</th></tr></thead>
+    <tbody>${rows}${avgrow}</tbody></table></div>`;
+}
+function card(v,l){ return `<div class="card"><b>${v}</b><span>${l}</span></div>`; }
+function esc(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+$('go').onclick = load;
+$('tok').addEventListener('keydown', e => { if(e.key === 'Enter') load(); });
+</script>
+</body>
+</html>

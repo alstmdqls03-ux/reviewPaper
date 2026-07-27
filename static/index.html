@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>리뷰 논문 학습 챗봇</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23000'/%3E%3Ccircle cx='12' cy='12' r='3.2' fill='white'/%3E%3Ccircle cx='21' cy='20' r='2.4' fill='white'/%3E%3Cpath d='M13.6 13.8 19 18.4' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<script src="cytoscape.min.js"></script>
+<script src="cola.min.js"></script>
+<script src="cytoscape-cola.js"></script>
+<style>
+  :root {
+    --canvas:#000; --canvas-soft:#0a0a0a; --surface:#0a0a0a; --hairline:#3a3a3f;
+    --on:#fff; --on-mute:#a9a9b2; --ink-faint:#8a8a94; --danger:#ff5a5a;
+    --sans:'Inter', -apple-system, 'Arial Narrow', Arial, sans-serif;
+    --radius-sm:8px; --radius-md:16px; --radius-pill:32px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--sans); color: var(--on); background: var(--canvas); font-size: 16px; line-height: 1.5; overflow-x: hidden; }
+  #app { display: flex; height: 100vh; }
+  /* Chat pane */
+  #chat { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; background: var(--canvas); }
+  #chat header { padding: 16px 20px 0; background: var(--canvas); position: relative; z-index: 2; }
+  #chat header h1 { font-size: 15px; font-weight: 800; margin: 0; text-transform: uppercase; letter-spacing: 1.4px; color: var(--on); }
+  .hd-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .hd-title { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .hd-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .iconbtn { padding: 8px; min-width: 44px; min-height: 44px; border-radius: var(--radius-sm); }
+  /* Tab bar (primary nav) */
+  .tabbar { display: flex; gap: 18px; margin-top: 14px; border-bottom: 1px solid var(--hairline); }
+  .tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--on-mute); padding: 10px 8px; min-height: 44px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.1px; transition: color .15s ease, border-color .15s ease; }
+  .tab:hover { background: transparent; color: var(--on); }
+  .tab.active { color: var(--on); border-bottom-color: var(--on); }
+  .tab .tabdot { width: 6px; height: 6px; border-radius: 50%; background: var(--on); margin-left: 6px; opacity: 0; transition: opacity .15s ease; }
+  .tab.hasdot .tabdot { opacity: 1; }
+  /* Tab content regions — one visible at a time */
+  .tabwrap { flex: 1; display: flex; min-height: 0; }
+  .tabpane { display: none; flex: 1; min-width: 0; min-height: 0; }
+  .tabpane.active { display: flex; flex-direction: column; }
+  #log { flex: 1; overflow-y: auto; padding: 20px; }
+  .msg { margin-bottom: 16px; max-width: 90%; animation: msgIn .2s ease both; }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .msg.user { margin-left: auto; }
+  .bubble { padding: 12px 15px; border-radius: 14px; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+  .user .bubble { background: rgba(255,255,255,.06); border: 1px solid var(--hairline); color: var(--on); border-bottom-right-radius: 6px; }
+  .bot .bubble { background: var(--canvas-soft); border: 1px solid var(--hairline); color: var(--on-mute); border-bottom-left-radius: 6px; }
+  .bot .bubble.err { background: var(--canvas-soft); color: var(--danger); border-color: rgba(255,90,90,.45); }
+  .cite { font-size: 11px; vertical-align: super; color: var(--on); cursor: help; margin: 0 1px; font-weight: 700; letter-spacing: .5px; }
+  .sources { margin-top: 8px; font-size: 11px; color: var(--on-mute); }
+  .srcrow { border-top: 1px solid var(--hairline); }
+  .srchead { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 6px 0; cursor: pointer; }
+  .srchead:hover { color: var(--on); }
+  .srctoggle { flex-shrink: 0; text-transform: uppercase; letter-spacing: .6px; font-size: 10px; color: var(--ink-faint); }
+  .srcrow.open .srctoggle { color: var(--on); }
+  .passage { display: none; padding: 2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--on-mute); font-style: italic; border-left: 2px solid var(--border, #5a5a5f); padding-left: 12px; margin: 0 0 8px; }
+  .srcrow.open .passage { display: block; }
+  .cite { cursor: pointer; }
+  .cite:hover { color: var(--on); }
+  .empty { color: var(--on-mute); font-size: 13px; }
+  .onboard { max-width: 520px; }
+  .ob-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; color: var(--on); margin-bottom: 14px; }
+  .ob-steps { list-style: none; counter-reset: ob; padding: 0; margin: 0; }
+  .ob-steps li { counter-increment: ob; position: relative; padding: 0 0 12px 30px; font-size: 13.5px; line-height: 1.55; color: var(--on-mute); }
+  .ob-steps li::before { content: counter(ob); position: absolute; left: 0; top: 0; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--on); border: 1px solid var(--border, #5a5a5f); border-radius: 50%; }
+  .ob-steps li b { color: var(--on); font-weight: 600; }
+  .ob-hint { margin-top: 6px; font-size: 12px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .8px; }
+  .cursor::after { content: '▋'; color: var(--on); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  form { display: flex; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--hairline); background: var(--canvas); }
+  #q { flex: 1; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); font-size: 15px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); transition: border-color .15s ease, box-shadow .15s ease; }
+  #q::placeholder { color: var(--ink-faint); }
+  #q:focus { outline: none; border-color: var(--on); box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+  /* ghost pill buttons */
+  button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 12px 20px; border: 1px solid var(--on); border-radius: var(--radius-pill); background: transparent; color: var(--on); font-size: 13px; font-family: var(--sans); font-weight: 700; text-transform: uppercase; letter-spacing: 1.17px; cursor: pointer; transition: background .15s ease, transform .1s ease, border-color .15s ease, color .15s ease; }
+  button:hover { background: rgba(255,255,255,.08); }
+  button:active { transform: scale(.97); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+  button:disabled { opacity: .4; cursor: default; transform: none; }
+  button svg { flex-shrink: 0; }
+  .suggest { padding: 0 20px 12px; }
+  .suggest span { display: inline-flex; align-items: center; margin: 4px 4px 0 0; padding: 7px 14px; font-size: 12px; background: var(--canvas-soft); color: var(--on-mute); border: 1px solid var(--hairline); border-radius: var(--radius-pill); cursor: pointer; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+  .suggest span:hover { background: rgba(255,255,255,.06); color: var(--on); border-color: var(--on-mute); }
+  #quizbar { padding: 0; display: none; }
+  #quizbtn { width: 100%; margin-bottom: 10px; }
+  /* Quiz overlay (takeover of chat pane) */
+  #quiz { position: absolute; inset: 0; background: var(--canvas-soft); display: none; flex-direction: column; z-index: 5; border: 1px solid var(--hairline); }
+  #quiz.open { display: flex; }
+  #quiz header { padding: 16px 20px; border-bottom: 1px solid var(--hairline); display: flex; align-items: center; justify-content: space-between; background: var(--canvas-soft); }
+  #quiz header h1 { font-size: 15px; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 1.2px; }
+  #quizbody { flex: 1; overflow-y: auto; padding: 20px; }
+  .qcard { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 16px; margin-bottom: 16px; background: var(--canvas-soft); }
+  .qcard .qnum { font-size: 11px; color: var(--on-mute); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
+  .qcard .qtext { font-size: 15px; font-weight: 600; margin: 6px 0 8px; line-height: 1.6; color: var(--on); }
+  .qcard .qsrc { font-size: 11px; color: var(--on-mute); margin-bottom: 12px; }
+  .opt { display: block; padding: 11px 13px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); margin-bottom: 8px; font-size: 15px; cursor: pointer; line-height: 1.5; color: var(--on-mute); transition: background .15s ease, border-color .15s ease; }
+  .opt:hover { background: rgba(255,255,255,.06); }
+  .opt input { margin-right: 8px; accent-color: var(--on); }
+  .opt.correct { background: rgba(255,255,255,.08); border-color: var(--on); color: var(--on); }
+  .opt.wrong { border-color: var(--danger); color: var(--danger); opacity: .8; }
+  .qresult { margin-top: 10px; font-size: 14px; }
+  .qresult .mark { font-weight: 700; }
+  .qresult .ok { color: var(--on); }
+  .qresult .no { color: var(--danger); }
+  .qresult .exp { color: var(--on-mute); margin: 6px 0; line-height: 1.6; }
+  .review-link { display: inline-block; font-size: 12px; color: var(--on); cursor: pointer; text-decoration: underline; }
+  #quizfoot { padding: 14px 16px; border-top: 1px solid var(--hairline); display: flex; gap: 8px; align-items: center; background: var(--canvas-soft); }
+  #score { font-size: 13px; font-weight: 700; margin-right: auto; text-transform: uppercase; letter-spacing: 1px; color: var(--on); }
+  .ghostbtn { background: transparent; color: var(--on); border: 1px solid var(--hairline); }
+  .ghostbtn:hover { background: rgba(255,255,255,.08); border-color: var(--on); }
+  /* Graph pane */
+  #graphpane { position: relative; background: var(--canvas); overflow: hidden; }
+  #graphtoolbar { position: absolute; top: 12px; right: 14px; z-index: 4; display: flex; gap: 6px; }
+  .gbtn { padding: 7px 11px; min-height: 36px; font-size: 11px; letter-spacing: .8px; gap: 5px; background: rgba(10,10,10,.82); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-color: var(--border, #5a5a5f); }
+  #cy { width: 100%; height: 100%; }
+  #graphempty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--ink-faint); pointer-events: none; }
+  #panel { position: absolute; right: 0; top: 0; width: 280px; height: 100%; z-index: 5; background: var(--canvas-soft); border-left: 1px solid var(--hairline); padding: 20px; overflow-y: auto; transform: translateX(100%); transition: transform .2s ease; }
+  #panel.open { transform: translateX(0); }
+  #panelbody { padding-top: 22px; }
+  #panel h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; color: var(--on); }
+  #panel .kind { font-size: 11px; color: var(--on-mute); text-transform: uppercase; letter-spacing: 1px; }
+  #panel p { font-size: 15px; line-height: 1.6; color: var(--on-mute); }
+  #panel .src { font-size: 11px; color: var(--on-mute); border-top: 1px solid var(--hairline); padding-top: 8px; margin-top: 8px; }
+  #panel .close { position: absolute; top: 12px; right: 14px; cursor: pointer; color: var(--on-mute); font-size: 18px; line-height: 1; transition: color .15s ease; }
+  #panel .close:hover { color: var(--on); }
+  #panel .collapse { position: absolute; top: 12px; right: 40px; cursor: pointer; color: var(--on-mute); font-size: 18px; line-height: 1; transition: color .15s ease, transform .2s ease; }
+  #panel .collapse:hover { color: var(--on); }
+  #panel.collapsed { height: 46px; overflow: hidden; }
+  #panel.collapsed #panelbody { opacity: 0; }
+  #panel.collapsed .collapse { transform: rotate(180deg); }
+  .wiki-status { display: inline-block; margin: 2px 0 12px; padding: 3px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .8px; border-radius: var(--radius-pill); border: 1px solid var(--border, #5a5a5f); color: var(--on-mute); }
+  .wiki-status.s-known { background: var(--on); color: var(--canvas); border-color: var(--on); }
+  .wiki-status.s-due { border-style: dashed; color: var(--on); }
+  .wiki-status.s-learning { color: var(--on); }
+  .wiki-sec { border-top: 1px solid var(--hairline); padding-top: 10px; margin-top: 12px; }
+  .wiki-sec > strong, .src > strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--ink-faint); margin-bottom: 8px; font-weight: 700; }
+  .wikilinks { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wikilink { padding: 6px 10px; font-size: 12px; letter-spacing: normal; text-transform: none; font-weight: 500; gap: 6px; color: var(--on); background: var(--canvas-soft); border-color: var(--hairline); }
+  .wikilink:hover { background: rgba(255,255,255,.08); border-color: var(--on-mute); }
+  .wikilink .rel { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-faint); }
+  .understood { width: 100%; margin-top: 16px; padding: 11px 14px; font-size: 12px; }
+  .understood.on { background: var(--on); color: var(--canvas); border-color: var(--on); }
+  .understood.on:hover { background: #e6e6ea; }
+  #graphlabel { position: absolute; top: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--on-mute); background: rgba(10,10,10,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 6px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+  /* --- added: mastery / next_up / notes / upload --- */
+  .hbtns { margin-top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .hbtns button { padding: 8px 13px; font-size: 12px; letter-spacing: 1px; }
+  #metrics { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-faint); margin-top: 0; text-transform: uppercase; letter-spacing: .8px; }
+  #metrics::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--on); box-shadow: 0 0 0 0 rgba(255,255,255,.5); animation: livePulse 2s ease-out infinite; flex-shrink: 0; }
+  @keyframes livePulse { 0% { box-shadow: 0 0 0 0 rgba(255,255,255,.5); } 70% { box-shadow: 0 0 0 6px rgba(255,255,255,0); } 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); } }
+  #dashboard { display: none; margin-bottom: 18px; }
+  .dash-score { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; margin-bottom: 12px; border: 1px solid var(--on-mute); border-radius: var(--radius-md); background: var(--canvas-soft); }
+  .dash-score b { font-size: 30px; font-weight: 800; color: var(--on); line-height: 1; }
+  .dash-score span { font-size: 11px; color: var(--on-mute); text-transform: uppercase; letter-spacing: 1px; }
+  .dash-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .dash-tile { padding: 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--canvas-soft); }
+  .dash-tile b { display: block; font-size: 20px; font-weight: 700; color: var(--on); }
+  .dash-tile span { font-size: 10px; color: var(--on-mute); text-transform: uppercase; letter-spacing: .6px; }
+  #nextup { padding: 0; display: none; }
+  .nu-title { font-size: 11px; font-weight: 700; color: var(--on-mute); margin: 4px 0; text-transform: uppercase; letter-spacing: 1px; }
+  .nu-item { display: flex; flex-direction: column; padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); background: var(--canvas-soft); cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .1s ease; }
+  .nu-item:hover { background: rgba(255,255,255,.06); border-color: var(--on-mute); }
+  .nu-item strong { font-size: 13px; color: var(--on); }
+  .nu-item span { font-size: 12px; color: var(--on-mute); margin-top: 2px; line-height: 1.5; }
+  .notebtn { margin-top: 8px; padding: 6px 12px; font-size: 11px; letter-spacing: 1px; }
+  .pane-toolbar { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-bottom: 1px solid var(--hairline); }
+  .pane-toolbar button { padding: 8px 13px; font-size: 12px; letter-spacing: 1px; }
+  #study { padding: 16px 20px; overflow-y: auto; }
+  .study-hint { font-size: 12px; color: var(--ink-faint); margin-top: 12px; line-height: 1.6; }
+  #notesbody { flex: 1; overflow-y: auto; padding: 20px; }
+  .notecard { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; background: var(--canvas-soft); }
+  .notecard .ntext { font-size: 15px; line-height: 1.6; white-space: pre-wrap; color: var(--on-mute); }
+  .notecard .nmeta { font-size: 11px; color: var(--on-mute); margin-top: 8px; text-transform: uppercase; letter-spacing: .8px; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .modal.open { display: flex; }
+  .modalcard { background: var(--canvas-soft); border-radius: var(--radius-md); padding: 22px; width: 320px; max-width: 90%; border: 1px solid var(--hairline); }
+  .modalcard h2 { font-size: 14px; font-weight: 800; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--on); }
+  #uptitle { width: 100%; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); font-size: 14px; margin-bottom: 10px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); transition: border-color .15s ease, box-shadow .15s ease; }
+  #uptitle::placeholder { color: var(--ink-faint); }
+  #uptitle:focus { outline: none; border-color: var(--on); box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+  .modalcard input[type=file] { width: 100%; font-size: 12px; margin-bottom: 12px; color: var(--on-mute); }
+  .modalrow { display: flex; gap: 8px; justify-content: flex-end; }
+  #upstatus { font-size: 12px; color: var(--on-mute); margin-top: 10px; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--canvas-soft); color: var(--on); border: 1px solid var(--hairline); padding: 10px 18px; border-radius: var(--radius-sm); font-size: 13px; opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 30; }
+  #toast.show { opacity: .98; }
+  #masterylegend { position: absolute; bottom: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--on-mute); background: rgba(10,10,10,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 8px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); line-height: 1.9; }
+  #masterylegend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 2px solid transparent; box-sizing: border-box; }
+  /* --- added: account / history --- */
+  #acct { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--on-mute); cursor: pointer; margin-top: 0; padding: 5px 12px; background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-pill); text-transform: uppercase; letter-spacing: .8px; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+  #acct:hover { background: rgba(255,255,255,.06); color: var(--on); border-color: var(--on-mute); }
+  #historybody { flex: 1; overflow-y: auto; padding: 20px; }
+  .convcard { display: flex; align-items: center; gap: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; cursor: pointer; background: var(--canvas-soft); transition: background .15s ease, border-color .15s ease; }
+  .convcard:hover { background: rgba(255,255,255,.06); border-color: var(--on-mute); }
+  .convcard .cmain { flex: 1; min-width: 0; }
+  .convcard .ctitle { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on); }
+  .convcard .cmeta { font-size: 11px; color: var(--on-mute); margin-top: 3px; text-transform: uppercase; letter-spacing: .8px; }
+  .convcard .cdel { color: var(--on-mute); font-size: 15px; cursor: pointer; padding: 2px 4px; transition: color .15s ease; }
+  .convcard .cdel:hover { color: var(--danger); }
+  #acctname { width: 100%; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); font-size: 14px; margin-bottom: 12px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); transition: border-color .15s ease, box-shadow .15s ease; }
+  #acctname::placeholder { color: var(--ink-faint); }
+  #acctname:focus { outline: none; border-color: var(--on); box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+  #acctsync { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+  .acctsync-h { font-size: 12px; font-weight: 700; color: var(--on-mute); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .acctsync-l { display: block; font-size: 11px; color: var(--ink-faint); margin: 8px 0 4px; }
+  .acctsync-code { display: flex; gap: 6px; }
+  .acctsync-code code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 8px 10px; font-size: 11px; font-family: var(--mono, monospace); color: var(--on); background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
+  .acctsync-code input { flex: 1; min-width: 0; padding: 8px 10px; font-size: 12px; color: var(--on); background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-sm); font-family: var(--mono, monospace); }
+  .acctsync-code button { flex-shrink: 0; padding: 8px 12px; font-size: 11px; letter-spacing: .5px; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .stat-grid .cell { background: var(--canvas); border: 1px solid var(--hairline); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .stat-grid .cell b { display: block; font-size: 18px; font-weight: 700; color: var(--on); }
+  .stat-grid .cell span { font-size: 11px; color: var(--on-mute); text-transform: uppercase; letter-spacing: .8px; }
+  .cohort-row { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 0; border-top: 1px solid var(--hairline); color: var(--on-mute); }
+  .cohort-row span:last-child { color: var(--on-mute); }
+  /* Responsive: stack panes vertically under 900px */
+  @media (max-width: 900px) {
+    #app { flex-direction: column; height: 100vh; }
+    #graphtoolbar { top: 8px; right: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    .msg { animation: none; }
+    button:active { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="chat">
+    <header>
+      <div class="hd-row">
+        <div class="hd-title">
+          <h1>리뷰 논문 학습 챗봇</h1>
+          <div id="metrics"></div>
+        </div>
+        <div class="hd-actions">
+          <button type="button" class="iconbtn" id="newconv" title="새 대화"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="iconbtn" id="uploadopen" title="논문 추가"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg></button>
+          <span id="acct" title="닉네임 설정"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span id="acctlabel">익명</span></span>
+        </div>
+      </div>
+      <nav class="tabbar" role="tablist" aria-label="주요 탐색">
+        <button type="button" class="tab active" data-tab="chat" role="tab" aria-selected="true">대화</button>
+        <button type="button" class="tab" data-tab="graph" role="tab" aria-selected="false">그래프</button>
+        <button type="button" class="tab" data-tab="study" role="tab" aria-selected="false">학습<span class="tabdot"></span></button>
+        <button type="button" class="tab" data-tab="notes" id="notesopen" role="tab" aria-selected="false">노트</button>
+        <button type="button" class="tab" data-tab="history" id="historyopen" role="tab" aria-selected="false">기록</button>
+      </nav>
+    </header>
+
+    <div class="tabwrap">
+      <!-- 대화 -->
+      <div class="tabpane active" data-pane="chat">
+        <div id="log"><div class="empty">아래 질문을 눌러보거나 직접 물어보세요.</div></div>
+        <div class="suggest" id="suggest"></div>
+      </div>
+      <!-- 학습 -->
+      <div class="tabpane" data-pane="study" id="study">
+        <div id="dashboard"></div>
+        <div id="nextup"></div>
+        <div id="quizbar"><button id="quizbtn" type="button"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>지금까지 배운 걸로 퀴즈 풀기</button></div>
+        <div class="study-hint">개념을 학습할수록 “다음에 공부할 개념”과 퀴즈가 여기에 나타납니다.</div>
+      </div>
+      <!-- 노트 -->
+      <div class="tabpane" data-pane="notes" id="notes">
+        <div class="pane-toolbar">
+          <button type="button" class="ghostbtn" id="notesexport"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>Markdown 내보내기</button>
+          <button type="button" class="ghostbtn" id="notesclose">대화로</button>
+        </div>
+        <div id="notesbody"></div>
+      </div>
+      <!-- 기록 -->
+      <div class="tabpane" data-pane="history" id="history">
+        <div class="pane-toolbar">
+          <button type="button" class="ghostbtn" id="historystats"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg>통계</button>
+          <button type="button" class="ghostbtn" id="historyclose">대화로</button>
+        </div>
+        <div id="historybody"></div>
+      </div>
+      <!-- 그래프 -->
+      <div class="tabpane" data-pane="graph" id="graphpane">
+        <div id="graphtoolbar">
+          <button type="button" class="gbtn" id="gfit" title="맞춤 (전체 보기)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>맞춤</button>
+          <button type="button" class="gbtn" id="grelayout" title="재배치 (다시 정리)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>재배치</button>
+          <button type="button" class="gbtn" id="gclose" title="모두 닫기 (패널 닫고 맞춤)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>모두 닫기</button>
+        </div>
+        <div id="graphlabel">개념 그래프 — 노드를 클릭하면 설명·출처가 나와요</div>
+        <div id="cy"></div>
+        <div id="graphempty">대화를 시작하면 개념 지도가 자라납니다</div>
+        <div id="masterylegend">
+          <div><span class="dot" style="border-color:#fff;background:#fff;"></span>학습 완료</div>
+          <div><span class="dot" style="border-color:#8a8a92;background:#0a0a0a;"></span>학습 중</div>
+          <div><span class="dot" style="border-color:#fff;background:#0a0a0a;border-style:dashed;"></span>복습 필요</div>
+        </div>
+        <div id="panel">
+          <span class="collapse" onclick="togglePanel()" title="접기/펴기">⌄</span>
+          <span class="close" onclick="closePanel()" title="닫기">×</span>
+          <div id="panelbody"></div>
+        </div>
+      </div>
+    </div>
+
+    <form id="f">
+      <input id="q" placeholder="논문에 대해 질문하기…" autocomplete="off">
+      <button id="send">전송</button>
+    </form>
+
+    <!-- Quiz takeover -->
+    <div id="quiz">
+      <header>
+        <h1><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>개념 퀴즈</h1>
+        <button type="button" class="ghostbtn" id="quizclose">다시 대화로</button>
+      </header>
+      <div id="quizbody"></div>
+      <div id="quizfoot">
+        <span id="score"></span>
+        <button type="button" id="quizsubmit">채점하기</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PDF upload modal -->
+<div id="uploadmodal" class="modal">
+  <div class="modalcard">
+    <h2><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>논문 추가 (PDF)</h2>
+    <input id="uptitle" type="text" placeholder="논문 제목 (비우면 파일명 사용)">
+    <input id="upfile" type="file" accept="application/pdf">
+    <div class="modalrow">
+      <button type="button" class="ghostbtn" id="upcancel">취소</button>
+      <button type="button" id="upsubmit">추가</button>
+    </div>
+    <div id="upstatus"></div>
+  </div>
+</div>
+<!-- Account nickname modal -->
+<div id="acctmodal" class="modal">
+  <div class="modalcard">
+    <h2><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>닉네임 설정</h2>
+    <input id="acctname" type="text" placeholder="닉네임 (비우면 익명)" maxlength="40">
+    <div class="modalrow">
+      <button type="button" class="ghostbtn" id="acctcancel">취소</button>
+      <button type="button" id="acctsave">저장</button>
+    </div>
+    <div id="acctsync">
+      <div class="acctsync-h">다른 기기에서 진척 이어가기</div>
+      <label class="acctsync-l">이 기기의 복원 코드 (다른 기기에 붙여넣기)</label>
+      <div class="acctsync-code"><code id="accttoken">…</code><button type="button" class="ghostbtn" id="accttokencopy">복사</button></div>
+      <label class="acctsync-l">복원 코드로 로그인 (진척 합쳐짐)</label>
+      <div class="acctsync-code"><input id="acctclaim" type="text" placeholder="복원 코드 붙여넣기" autocomplete="off"><button type="button" id="acctclaimbtn">이어가기</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Analytics modal -->
+<div id="statsmodal" class="modal">
+  <div class="modalcard" style="width:360px;">
+    <h2><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-6"/></svg>학습 통계</h2>
+    <div id="statsbody"><div class="empty">불러오는 중…</div></div>
+    <div class="modalrow" style="margin-top:12px;">
+      <button type="button" class="ghostbtn" id="statsclose">닫기</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script>
+const SUGGESTIONS = [
+  "EM 이미지 딥러닝 세그멘테이션 정확도를 좌우하는 요인은?",
+  "왜 딥러닝 세그멘테이션이 이미징 조건·메타데이터 기록에 의존하나?",
+  "메타데이터 표준(FAIR)이 재현성에 왜 필요한가?",
+  "이 리뷰들은 어노테이션 부담 문제를 각각 어떻게 접근하나?"
+];
+const log = document.getElementById('log');
+const suggest = document.getElementById('suggest');
+
+// C-c: study-guide onboarding (research-backed 5-step flow), shown as the chat empty state.
+const ONBOARD = `<div class="empty onboard">
+  <div class="ob-title">이 논문, 이렇게 공부해보세요</div>
+  <ol class="ob-steps">
+    <li><b>훑기</b> — 초록·그림·결론을 먼저 보고 궁금한 점 3개를 정해요.</li>
+    <li><b>질문하며 읽기</b> — 아래 질문을 누르거나 직접 물어보세요. 답변엔 원문 인용이 달리고, 클릭하면 구절이 펼쳐져요.</li>
+    <li><b>이해 확정</b> — 그래프에서 개념을 “이해했어요”로 체크하면 지도가 흰색으로 채워져요.</li>
+    <li><b>퀴즈로 복습</b> — 배운 개념이 쌓이면 간격반복 퀴즈가 열려요. 오답은 다시 복습으로 돌아와요.</li>
+  </ol>
+  <div class="ob-hint">아래 추천 질문으로 시작해보세요 ↓</div>
+</div>`;
+log.innerHTML = ONBOARD;
+SUGGESTIONS.forEach(s => {
+  const el = document.createElement('span');
+  el.textContent = s;
+  el.onclick = () => { document.getElementById('q').value = s; send(); };
+  suggest.appendChild(el);
+});
+
+// ---- Tabs (primary nav for the chat pane) ----
+function showTab(name){
+  document.querySelectorAll('#chat .tab').forEach(t => { const on = t.dataset.tab === name; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  document.querySelectorAll('#chat .tabpane').forEach(p => p.classList.toggle('active', p.dataset.pane === name));
+  document.getElementById('f').style.display = name === 'chat' ? 'flex' : 'none'; // input only on 대화
+  if(name === 'study'){ const st = document.querySelector('.tab[data-tab="study"]'); if(st) st.classList.remove('hasdot'); }
+  // Cytoscape was hidden (display:none → 0px); resize + reframe once its pane is visible.
+  if(name === 'graph' && cy){ cy.resize(); runPhysics(true); }
+}
+document.querySelector('.tab[data-tab="chat"]').onclick = () => showTab('chat');
+document.querySelector('.tab[data-tab="graph"]').onclick = () => showTab('graph');
+document.querySelector('.tab[data-tab="study"]').onclick = () => showTab('study');
+
+// ---- Graph toolbar: 맞춤 / 재배치 / 모두 닫기, and concept-panel 접기/펴기 ----
+function fitGraph(){ if(cy && cy.nodes().length) cy.animate({ fit:{ eles:cy.nodes(), padding:70 } }, { duration:300 }); }
+function togglePanel(){ document.getElementById('panel').classList.toggle('collapsed'); }
+document.getElementById('gfit').onclick = fitGraph;
+document.getElementById('grelayout').onclick = () => { if(cy) runPhysics(true); };
+document.getElementById('gclose').onclick = () => { closePanel(); fitGraph(); };
+// #notesopen / #historyopen tab buttons keep their existing onclick (openNotes / openHistory below),
+// which delegate to showTab('notes') / showTab('history') and load their data.
+
+function esc(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+function getSession(){ return localStorage.getItem('rp_session'); }
+function setSession(id){ if(id) localStorage.setItem('rp_session', id); }
+// conversation_id threads a persisted conversation; sent back on every /chat in the same thread.
+function getConv(){ return localStorage.getItem('rp_conv'); }
+function setConv(id){ if(id) localStorage.setItem('rp_conv', id); }
+
+// Device id = the learner across sessions. Sent as X-Device-Id on every fetch.
+function getDevice(){
+  let d = localStorage.getItem('rp_device');
+  if(!d){
+    d = [...crypto.getRandomValues(new Uint8Array(16))].map(b=>b.toString(16).padStart(2,'0')).join('');
+    localStorage.setItem('rp_device', d);
+  }
+  return d;
+}
+const DEVICE = getDevice();
+function hdr(extra){ return Object.assign({'X-Device-Id': DEVICE}, extra||{}); }
+
+// Small bottom toast.
+let toastT = null;
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+function addUser(text){
+  const wrap = document.createElement('div'); wrap.className='msg user';
+  wrap.innerHTML = `<div class="bubble">${esc(text)}</div>`;
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+  suggest.style.display = 'none'; // 추천칩은 대화 시작 전에만
+}
+
+// Builds a streaming bot bubble; returns handlers to feed it incrementally.
+function newBotBubble(){
+  const wrap = document.createElement('div'); wrap.className='msg bot';
+  const bubble = document.createElement('div'); bubble.className='bubble cursor';
+  const srcBox = document.createElement('div'); srcBox.className='sources'; srcBox.style.display='none';
+  const noteBtn = document.createElement('button');
+  noteBtn.type='button'; noteBtn.className='notebtn'; noteBtn.textContent='📌 노트 저장'; noteBtn.style.display='none';
+  wrap.appendChild(bubble); wrap.appendChild(srcBox); wrap.appendChild(noteBtn);
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+  let html = '', n = 0;
+  let plain = '', firstCite = null, concepts = [];
+  const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  noteBtn.onclick = () => saveNote(plain, firstCite, concepts[0] || null, noteBtn);
+  // C-b: click a source row to expand its cited passage; click an inline [n] to jump+expand.
+  srcBox.onclick = e => { const row = e.target.closest('.srcrow'); if(row) row.classList.toggle('open'); };
+  bubble.onclick = e => {
+    const s = e.target.closest('.cite'); if(!s) return;
+    const row = srcBox.querySelector('.srcrow[data-n="'+s.dataset.n+'"]');
+    if(row){ row.classList.add('open'); row.scrollIntoView({block:'nearest', behavior:'smooth'}); }
+  };
+  return {
+    text(delta){
+      const stick = atBottom();
+      plain += delta;
+      html += esc(delta);
+      bubble.innerHTML = html;
+      bubble.classList.add('cursor');
+      if(stick) log.scrollTop = log.scrollHeight;
+    },
+    citation(c){
+      n++;
+      if(!firstCite) firstCite = c.title || null;
+      const page = c.start_page ? `p.${c.start_page}${c.end_page && c.end_page!==c.start_page ? '–'+c.end_page : ''}` : '';
+      const tip = `${c.title||''} ${page}\n클릭하면 원문 구절이 펼쳐져요`;
+      html += `<sup class="cite" data-n="${n}" title="${esc(tip)}">[${n}]</sup>`;
+      bubble.innerHTML = html; bubble.classList.add('cursor');
+      const row = document.createElement('div');
+      row.className = 'srcrow'; row.dataset.n = n;
+      const passage = (c.cited_text||'').trim();
+      row.innerHTML = `<div class="srchead"><span>[${n}] ${esc(`${c.title||''} ${page}`.trim())}</span>`+
+        (passage?`<span class="srctoggle">원문 보기</span>`:'')+`</div>`+
+        (passage?`<div class="passage">“${esc(passage)}”</div>`:'');
+      srcBox.appendChild(row); srcBox.style.display='';
+    },
+    done(cs){ bubble.classList.remove('cursor'); if(cs) concepts = cs; if(plain.trim()) noteBtn.style.display=''; },
+    error(m){ bubble.classList.remove('cursor'); bubble.classList.add('err'); bubble.textContent = m; }
+  };
+}
+
+async function send(){
+  const q = document.getElementById('q');
+  const text = q.value.trim(); if(!text) return;
+  const empty = log.querySelector('.empty'); if(empty) empty.remove();
+  addUser(text); q.value='';
+  const btn = document.getElementById('send'); btn.disabled = true;
+  const bot = newBotBubble();
+  try {
+    const r = await fetch('/chat', {
+      method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({session_id: getSession(), conversation_id: getConv(), message: text})
+    });
+    if(!r.ok || !r.body){ bot.error('오류: ' + r.status); return; }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for(;;){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf('\n\n')) !== -1){
+        const chunk = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        for(const line of chunk.split('\n')){
+          const s = line.trim();
+          if(!s.startsWith('data:')) continue;
+          const payload = s.slice(5).trim();
+          if(!payload || payload === '[DONE]') continue;
+          let ev; try { ev = JSON.parse(payload); } catch(e){ continue; }
+          handleEvent(ev, bot);
+        }
+      }
+    }
+    bot.done();
+  } catch(e){ bot.error('요청 실패: ' + e); }
+  finally { btn.disabled = false; }
+}
+
+function handleEvent(ev, bot){
+  switch(ev.type){
+    case 'session': setSession(ev.session_id); setConv(ev.conversation_id); break;
+    case 'text': bot.text(ev.text || ''); break;
+    case 'citation': bot.citation(ev.citation || {}); break;
+    case 'done':
+      bot.done(ev.concepts || []);
+      revealConcepts(ev.concepts || []); // grow the map before highlighting so the nodes exist
+      highlightConcepts(ev.concepts || []);
+      if(ev.quiz_available){
+        document.getElementById('quizbar').style.display = 'block';
+        const st = document.querySelector('.tab[data-tab="study"]'); if(st && !st.classList.contains('active')) st.classList.add('hasdot');
+      }
+      refreshMastery();
+      { const he = document.getElementById('history'); if(he && he.classList.contains('active')) loadConversations(); } // keep list fresh if open
+      break;
+    case 'error': bot.error('오류: ' + (ev.message || '알 수 없는 오류')); break;
+  }
+}
+document.getElementById('f').addEventListener('submit', e => { e.preventDefault(); send(); });
+
+// ---- Quiz ----
+let currentQuiz = null; // {quiz_id, questions}
+const quizEl = document.getElementById('quiz');
+const quizBody = document.getElementById('quizbody');
+
+document.getElementById('quizbtn').onclick = openQuiz;
+document.getElementById('quizclose').onclick = closeQuiz;
+document.getElementById('quizsubmit').onclick = gradeQuiz;
+
+function closeQuiz(){ quizEl.classList.remove('open'); showTab('chat'); }
+
+async function openQuiz(){
+  const sid = getSession();
+  if(!sid){ alert('조금 더 대화한 뒤에 퀴즈를 볼 수 있어요'); return; }
+  const btn = document.getElementById('quizbtn'); btn.disabled = true;
+  try {
+    const r = await fetch('/quiz', {method:'POST', headers: hdr({'Content-Type':'application/json'}), body: JSON.stringify({session_id: sid})});
+    if(r.status === 400){ alert('조금 더 대화한 뒤에 퀴즈를 볼 수 있어요'); return; }
+    if(!r.ok){ alert('퀴즈를 불러오지 못했어요 (' + r.status + ')'); return; }
+    currentQuiz = await r.json();
+    renderQuiz(currentQuiz);
+    quizEl.classList.add('open');
+  } catch(e){ alert('퀴즈 요청 실패: ' + e); }
+  finally { btn.disabled = false; }
+}
+
+function renderQuiz(quiz){
+  document.getElementById('score').textContent = '';
+  const submit = document.getElementById('quizsubmit');
+  submit.style.display = ''; submit.disabled = false;
+  quizBody.innerHTML = '';
+  quiz.questions.forEach((qn, i) => {
+    const card = document.createElement('div'); card.className = 'qcard'; card.dataset.qi = i;
+    const opts = qn.options.map((o, j) =>
+      `<label class="opt"><input type="radio" name="q${i}" value="${j}">${esc(o)}</label>`
+    ).join('');
+    card.innerHTML =
+      `<div class="qnum">문제 ${i+1}</div>`+
+      `<div class="qtext">${esc(qn.question)}</div>`+
+      (qn.source ? `<div class="qsrc">출처: ${esc(qn.source)}</div>` : '')+
+      opts +
+      `<div class="qresult"></div>`;
+    quizBody.appendChild(card);
+  });
+  quizBody.scrollTop = 0;
+}
+
+async function gradeQuiz(){
+  if(!currentQuiz) return;
+  const answers = currentQuiz.questions.map((qn, i) => {
+    const sel = quizBody.querySelector(`input[name="q${i}"]:checked`);
+    return sel ? parseInt(sel.value, 10) : -1; // ponytail: -1 unanswered -> backend counts wrong
+  });
+  const submit = document.getElementById('quizsubmit'); submit.disabled = true;
+  try {
+    const r = await fetch('/quiz/grade', {method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({session_id: getSession(), quiz_id: currentQuiz.quiz_id, answers})});
+    // ponytail: grading changes mastery, so refresh the overlay after
+    refreshMastery();
+    if(!r.ok){ alert('채점 실패 (' + r.status + ')'); submit.disabled = false; return; }
+    const res = await r.json();
+    showQuizResults(res);
+  } catch(e){ alert('채점 요청 실패: ' + e); submit.disabled = false; }
+}
+
+function showQuizResults(res){
+  document.getElementById('score').textContent = `${res.score} / ${res.total} 정답`;
+  document.getElementById('quizsubmit').style.display = 'none';
+  res.results.forEach((rr, i) => {
+    const card = quizBody.querySelector(`.qcard[data-qi="${i}"]`);
+    if(!card) return;
+    const labels = card.querySelectorAll('.opt');
+    labels.forEach((lab, j) => {
+      lab.querySelector('input').disabled = true;
+      const chosen = lab.querySelector('input').checked;
+      if(j === rr.correct_index) lab.classList.add('correct');
+      else if(chosen) lab.classList.add('wrong');
+    });
+    const box = card.querySelector('.qresult');
+    const mark = rr.correct ? '<span class="mark ok">✓ 정답</span>' : '<span class="mark no">✗ 오답</span>';
+    box.innerHTML =
+      mark +
+      (rr.explanation ? `<div class="exp">${esc(rr.explanation)}</div>` : '') +
+      (rr.concept_id ? `<span class="review-link">🔗 복습: 이 개념 보기</span>` : '');
+    const link = box.querySelector('.review-link');
+    if(link) link.onclick = () => review(rr.concept_id);
+  });
+}
+
+function review(conceptId){
+  closeQuiz();
+  focusConcept(conceptId);
+}
+
+// ---- Concept graph (Obsidian-style growing map) ----
+let cy = null;
+// Full graph is kept in JS refs only; cytoscape starts empty and grows via revealConcepts().
+let ALL_NODES = [], ALL_EDGES = [], NODE_BY_ID = {};
+const shownIds = new Set();
+const addedEdges = new Set(); // "source|target" keys already drawn
+
+function updateGraphEmpty(){
+  const e = document.getElementById('graphempty');
+  if(e) e.style.display = shownIds.size ? 'none' : 'flex';
+}
+
+// Reveal concept nodes as they're studied: fade/scale in + connect ready edges + gentle re-layout.
+function revealConcepts(ids){
+  if(!cy || !ids || !ids.length) return;
+  let added = false;
+  ids.forEach(id => {
+    if(shownIds.has(id) || !NODE_BY_ID[id]) return;
+    shownIds.add(id); added = true;
+    const n = cy.add({ group:'nodes', data:{ ...NODE_BY_ID[id], deg:0 } });
+    n.style('opacity', 0);
+    n.animate({ style:{ opacity:1 } }, { duration:450, complete:()=>n.removeStyle('opacity') });
+    n.addClass('justadded');                       // brief pop-glow on birth
+    setTimeout(()=>n.removeClass('justadded'), 1300);
+  });
+  if(!added) return; // guard: don't restart physics when nothing new appeared
+  ALL_EDGES.forEach(e => {
+    const key = e.source + '|' + e.target;
+    if(addedEdges.has(key)) return;
+    if(shownIds.has(e.source) && shownIds.has(e.target)){
+      addedEdges.add(key);
+      cy.add({ group:'edges', data:{ source:e.source, target:e.target, label:e.relation } });
+    }
+  });
+  cy.nodes().forEach(n => n.data('deg', n.degree()));  // hubs grow bigger (Obsidian-style)
+  runPhysics(true);                                    // organic force settle + reframe
+  updateGraphEmpty();
+}
+
+// Force layout that animates to an organic rest (looks alive as it settles), then stops.
+// refit=true reframes the camera afterward; drag-release re-settles in place (web ripples).
+let physics = null;
+function runPhysics(refit){
+  if(!cy || typeof cy.layout !== 'function') return;
+  if(physics){ try{ physics.stop(); }catch(e){} }
+  const reframe = () => { if(refit) cy.animate({ fit:{ eles:cy.nodes(), padding:70 } },
+                                               { duration:500, easing:'ease-in-out-cubic' }); };
+  try {
+    physics = cy.layout({ name:'cola', infinite:false, fit:false, animate:true,
+      maxSimulationTime:2000, nodeSpacing:22, edgeLength:100,
+      handleDisconnected:true, avoidOverlap:true, randomize:false });
+    physics.one('layoutstop', reframe);
+    physics.run();
+  } catch(e){                                   // cola missing → fall back to a one-shot cose
+    cy.layout({ name:'cose', animate:true, animationDuration:500, nodeRepulsion:120000,
+      idealEdgeLength:200, gravity:0.12 }).run();
+    setTimeout(reframe, 550);
+  }
+}
+function closePanel(){ document.getElementById('panel').classList.remove('open'); }
+
+// Relation label (edge.relation) -> short Korean tag for wikilinks.
+const REL_KO = { related_to:'관련', part_of:'부분', builds_on:'기반', uses:'사용', enables:'가능', compared_with:'대비' };
+// Wiki-style: neighbors of a concept from the graph edges -> clickable [[wikilinks]].
+function relatedConcepts(id){
+  const seen = new Set(), out = [];
+  ALL_EDGES.forEach(e => {
+    let other = null, rel = e.relation;
+    if(e.source === id) other = e.target; else if(e.target === id) other = e.source;
+    if(!other || seen.has(other) || !NODE_BY_ID[other]) return;
+    seen.add(other);
+    out.push({ id: other, label: NODE_BY_ID[other].label || other, rel });
+  });
+  return out.slice(0, 10);
+}
+// Mastery status of a concept, read from the live node's classes.
+function conceptStatus(node){
+  if(!node || !node.length) return { key:'new', label:'아직 안 배움' };
+  if(node.hasClass('m-known')) return { key:'known', label:'이해 완료' };
+  if(node.hasClass('m-due'))   return { key:'due',   label:'복습 필요' };
+  if(node.hasClass('m-learning')) return { key:'learning', label:'학습 중' };
+  return { key:'new', label:'아직 안 배움' };
+}
+
+// Concept "wiki page": summary + related-concept wikilinks + sources + mastery + understood toggle.
+function showPanel(d){
+  const src = (d.sources||[]).map(s=>`<div>${esc(s)}</div>`).join('');
+  const node = cy && cy.getElementById(d.id);
+  const known = !!(node && node.length && node.hasClass('m-known'));
+  const st = conceptStatus(node);
+  const rel = relatedConcepts(d.id);
+  const links = rel.map(r =>
+    `<button type="button" class="wikilink" onclick="focusConcept('${esc(r.id)}')">`+
+      `${esc(r.label)}<span class="rel">${esc(REL_KO[r.rel]||r.rel||'')}</span></button>`).join('');
+  document.getElementById('panelbody').innerHTML =
+    `<div class="kind">${esc(d.type||'개념')}</div><h2>${esc(d.label)}</h2>`+
+    `<div class="wiki-status s-${st.key}">${esc(st.label)}</div>`+
+    `<p>${esc(d.summary||'')}</p>`+
+    (links?`<div class="wiki-sec"><strong>관련 개념</strong><div class="wikilinks">${links}</div></div>`:'')+
+    (src?`<div class="src"><strong>출처</strong>${src}</div>`:'')+
+    `<button type="button" class="understood${known?' on':''}" data-cid="${esc(d.id)}" onclick="markKnown(this)">`+
+      `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`+
+      `<span>${known?'이해 완료':'이해했어요'}</span></button>`;
+  document.getElementById('panel').classList.remove('collapsed');
+  document.getElementById('panel').classList.add('open');
+}
+
+// Self-attest understanding of a concept -> server promotes mastery -> node color flips.
+async function markKnown(btn){
+  const cid = btn.getAttribute('data-cid');
+  const known = !btn.classList.contains('on');   // toggle
+  btn.disabled = true;
+  try {
+    const r = await fetch('/mastery/mark', {
+      method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({concept_id: cid, known})
+    });
+    if(!r.ok){ toast('저장 실패 (' + r.status + ')'); return; }
+    const node = cy && cy.getElementById(cid);
+    if(node && node.length){
+      node.removeClass('m-known m-learning m-due');
+      node.addClass(known ? 'm-known' : 'm-learning');
+    }
+    btn.classList.toggle('on', known);
+    btn.querySelector('span').textContent = known ? '이해 완료' : '이해했어요';
+    const badge = document.querySelector('#panelbody .wiki-status');
+    if(badge && node && node.length){ const st = conceptStatus(node); badge.className = 'wiki-status s-'+st.key; badge.textContent = st.label; }
+    toast(known ? '이해한 개념으로 표시했어요' : '표시를 해제했어요');
+    refreshMastery();  // sync next_up / accumulated state
+  } catch(e){ toast('저장 실패'); }
+  finally { btn.disabled = false; }
+}
+
+// Highlight the given node ids; dim the rest. Empty/falsy -> clear all.
+function highlightConcepts(ids){
+  if(!cy) return;
+  cy.nodes().removeClass('highlight dim');
+  if(!ids || !ids.length) return;
+  const set = new Set(ids);
+  cy.nodes().forEach(n => n.addClass(set.has(n.id()) ? 'highlight' : 'dim'));
+}
+
+// Single-node focus: highlight, center, open its panel.
+function focusConcept(id){
+  if(!cy) return;
+  if(!shownIds.has(id)) revealConcepts([id]); // grow the node in if it hasn't appeared yet
+  const node = cy.getElementById(id);
+  if(!node || node.empty()){ highlightConcepts([]); return; }
+  highlightConcepts([id]);
+  cy.animate({ center: { eles: node }, zoom: Math.max(cy.zoom(), 1) }, { duration: 400 });
+  showPanel(node.data());
+}
+
+fetch('/graph').then(r=>r.json()).then(g=>{
+  // Store full graph in refs only — cytoscape is initialized EMPTY and grows as concepts are studied.
+  ALL_NODES = g.nodes || [];
+  ALL_EDGES = g.edges || [];
+  NODE_BY_ID = {}; ALL_NODES.forEach(n => { NODE_BY_ID[n.id] = n; });
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: [],
+    minZoom: 0.35, maxZoom: 1.15,
+    style: [
+      { selector:'node', style:{
+        'label':'data(label)', 'font-size':11, 'text-wrap':'wrap', 'text-max-width':120,
+        'text-valign':'bottom', 'text-margin-y':7, 'color':'#c9c9d2',
+        'text-outline-width':3, 'text-outline-color':'#000', 'font-weight':600,
+        'background-color':'#cbd5e1',
+        'width':'mapData(deg, 0, 6, 15, 34)', 'height':'mapData(deg, 0, 6, 15, 34)',
+        'transition-property':'opacity, background-color, border-color, width, height',
+        'transition-duration':'160ms' } },
+      { selector:'edge', style:{
+        'label':'data(label)', 'font-size':9, 'color':'#cfcfd6', 'text-opacity':0,
+        'text-background-color':'#0a0a0a', 'text-background-opacity':0.8, 'text-background-padding':2,
+        'curve-style':'bezier', 'line-color':'#2f2f36', 'width':1.2, 'opacity':0.7,
+        'transition-property':'opacity, line-color, width', 'transition-duration':'160ms' } },
+      // mastery (monochrome): known=filled bright, learning=hollow outline, due=dashed ring
+      { selector:'node.m-learning', style:{ 'background-color':'#141419', 'border-width':2, 'border-color':'#7c7c88', 'color':'#cfcfd6' } },
+      { selector:'node.m-known', style:{ 'background-color':'#fff', 'border-width':2, 'border-color':'#fff' } },
+      { selector:'node.m-due', style:{ 'border-width':2, 'border-color':'#fff', 'border-style':'dashed' } },
+      // chat-active concepts: bright white, enlarged, soft glow
+      { selector:'node.highlight', style:{
+        'background-color':'#fff', 'border-width':3, 'border-color':'#fff',
+        'width':26, 'height':26, 'color':'#fff', 'z-index':10,
+        'overlay-color':'#fff', 'overlay-opacity':0.16, 'overlay-padding':10 } },
+      { selector:'node.dim', style:{ 'opacity':0.3 } },
+      { selector:'edge.dim', style:{ 'opacity':0.08 } },
+      // just-revealed pop-glow
+      { selector:'node.justadded', style:{ 'overlay-color':'#fff', 'overlay-opacity':0.32, 'overlay-padding':12 } },
+      // hover neighborhood focus
+      { selector:'.faded', style:{ 'opacity':0.1 } },
+      { selector:'node.nbr', style:{ 'opacity':1 } },
+      { selector:'node.nbrhub', style:{ 'background-color':'#fff', 'border-width':3, 'border-color':'#fff', 'width':30, 'height':30, 'color':'#fff', 'z-index':20 } },
+      { selector:'edge.nbr', style:{ 'opacity':1, 'line-color':'#fff', 'width':2, 'text-opacity':1,
+        'line-style':'dashed', 'line-dash-pattern':[6,5] } }
+    ]
+  });
+  cy.on('tap','node', e => showPanel(e.target.data()));
+  // hover: spotlight the node + its neighbors, fade the rest, reveal relation labels
+  cy.on('mouseover','node', e => {
+    const n = e.target;
+    cy.elements().addClass('faded');
+    n.closedNeighborhood().removeClass('faded').addClass('nbr');
+    n.addClass('nbrhub');
+    document.getElementById('cy').style.cursor = 'pointer';
+  });
+  cy.on('mouseout','node', e => {
+    cy.elements().removeClass('faded nbr nbrhub');
+    document.getElementById('cy').style.cursor = '';
+  });
+  // drag a node and the connected web re-settles around it (no reframe, camera stays put)
+  cy.on('dragfree','node', () => runPhysics(false));
+  // energy flowing along the highlighted connections
+  let dash = 0;
+  (function flow(){ if(cy){ dash = (dash - 0.7); cy.edges('.nbr').style('line-dash-offset', dash); } requestAnimationFrame(flow); })();
+  updateGraphEmpty();
+  refreshMastery(); // re-reveal accumulated concepts + apply mastery once the graph exists
+});
+
+// ---- Mastery overlay + "다음에 공부할 개념" ----
+function applyMastery(m){
+  if(!cy) return;
+  cy.nodes().removeClass('m-known m-learning m-due');
+  Object.entries(m || {}).forEach(([id, info]) => {
+    const n = cy.getElementById(id);
+    if(!n || n.empty()) return;
+    if(info.level === 'known') n.addClass('m-known');
+    else if(info.level === 'learning') n.addClass('m-learning');
+    if(info.due) n.addClass('m-due');
+  });
+}
+
+function renderNextUp(items){
+  const box = document.getElementById('nextup');
+  items = items || [];
+  const st = document.querySelector('.tab[data-tab="study"]');
+  if(!items.length){ box.style.display='none'; box.innerHTML=''; return; }
+  if(st && !st.classList.contains('active')) st.classList.add('hasdot'); // subtle badge on 학습 tab
+  box.style.display='block'; box.innerHTML='<div class="nu-title">다음에 공부할 개념</div>';
+  items.forEach(it => {
+    const el = document.createElement('div'); el.className='nu-item';
+    el.innerHTML = `<strong>${esc(it.label||'')}</strong>` + (it.reason ? `<span>${esc(it.reason)}</span>` : '');
+    el.onclick = () => {
+      focusConcept(it.concept_id);
+      document.getElementById('q').value = `${it.label}에 대해 설명해줘`;
+    };
+    box.appendChild(el);
+  });
+}
+
+function renderDashboard(d){
+  const box = document.getElementById('dashboard');
+  if(!d){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  const tile = (v, label) => `<div class="dash-tile"><b>${v}</b><span>${label}</span></div>`;
+  box.innerHTML =
+    `<div class="dash-score"><b>${d.learning_score}</b><span>학습 점수<br>퀴즈정답×10 + 이해완료×5 + 연속일×5</span></div>` +
+    '<div class="dash-grid">' +
+    tile(d.progress_pct + '%', '학습 진척률') +
+    tile(d.avg_score + '%', '평균 숙련도') +
+    tile((d.quiz_attempts ? d.quiz_accuracy + '%' : '—'), '퀴즈 정답률') +
+    tile(d.due_count, '복습 대기') +
+    tile(d.concepts_learned, '학습한 개념') +
+    tile(d.streak_days + '일', '연속 학습') +
+    '</div>';
+}
+
+async function refreshMastery(){
+  try {
+    const r = await fetch('/mastery', { headers: hdr() });
+    if(!r.ok) return;
+    const d = await r.json();
+    revealConcepts(Object.keys(d.mastery || {})); // re-reveal a returning user's accumulated concepts
+    applyMastery(d.mastery || {});
+    renderNextUp(d.next_up || []);
+    const rd = await fetch('/dashboard', { headers: hdr() });
+    if(rd.ok) renderDashboard(await rd.json());
+  } catch(e){ /* non-fatal */ }
+}
+
+// ---- Notes ----
+async function saveNote(text, source, concept_id, btn){
+  if(!text || !text.trim()) return;
+  try {
+    const r = await fetch('/notes', {
+      method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({text, source: source||'', concept_id: concept_id||''})
+    });
+    if(!r.ok){ toast('노트 저장 실패 (' + r.status + ')'); return; }
+    if(btn){ btn.textContent='✓ 저장됨'; btn.disabled=true; }
+    toast('노트에 저장했어요');
+  } catch(e){ toast('노트 저장 실패'); }
+}
+
+const notesEl = document.getElementById('notes');
+document.getElementById('notesopen').onclick = openNotes;
+document.getElementById('notesclose').onclick = () => showTab('chat');
+document.getElementById('notesexport').onclick = exportNotes;
+
+async function openNotes(){
+  const body = document.getElementById('notesbody');
+  body.innerHTML = '<div class="empty">불러오는 중…</div>';
+  showTab('notes');
+  try {
+    const r = await fetch('/notes', { headers: hdr() });
+    if(!r.ok){ body.innerHTML = '<div class="empty">노트를 불러오지 못했어요.</div>'; return; }
+    const d = await r.json();
+    const notes = d.notes || [];
+    if(!notes.length){ body.innerHTML = '<div class="empty">아직 저장한 노트가 없어요. 답변 아래 “📌 노트 저장”을 눌러보세요.</div>'; return; }
+    body.innerHTML = '';
+    notes.forEach(nt => {
+      const card = document.createElement('div'); card.className='notecard';
+      const meta = [nt.source, nt.created_at].filter(Boolean).map(esc).join(' · ');
+      card.innerHTML = `<div class="ntext">${esc(nt.text||'')}</div>` + (meta ? `<div class="nmeta">${meta}</div>` : '');
+      body.appendChild(card);
+    });
+  } catch(e){ body.innerHTML = '<div class="empty">노트를 불러오지 못했어요.</div>'; }
+}
+
+async function exportNotes(){
+  try {
+    const r = await fetch('/notes/export', { headers: hdr() });
+    if(!r.ok){ toast('내보내기 실패 (' + r.status + ')'); return; }
+    const blob = await r.blob();
+    let fn = 'notes.md';
+    const cd = r.headers.get('Content-Disposition');
+    if(cd){ const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^\";]+)"?/i); if(m) fn = decodeURIComponent(m[1]); }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fn;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(a.href);
+  } catch(e){ toast('내보내기 실패'); }
+}
+
+// ---- PDF upload ----
+const uploadModal = document.getElementById('uploadmodal');
+document.getElementById('uploadopen').onclick = () => {
+  document.getElementById('upstatus').textContent='';
+  uploadModal.classList.add('open');
+};
+document.getElementById('upcancel').onclick = () => uploadModal.classList.remove('open');
+document.getElementById('upsubmit').onclick = doUpload;
+
+async function doUpload(){
+  const f = document.getElementById('upfile').files[0];
+  const title = document.getElementById('uptitle').value.trim();
+  const st = document.getElementById('upstatus');
+  if(!f){ st.textContent='PDF 파일을 선택하세요.'; return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('title', title || f.name);
+  const btn = document.getElementById('upsubmit'); btn.disabled = true; st.textContent='업로드 중…';
+  try {
+    const r = await fetch('/upload', { method:'POST', body: fd }); // no device header (per spec)
+    if(!r.ok){ st.textContent='업로드 실패 (' + r.status + ')'; return; }
+    const d = await r.json();
+    st.textContent = `논문 추가됨 · 코퍼스 ${d.corpus_size}편`;
+    toast(`논문 추가됨 · 코퍼스 ${d.corpus_size}편`);
+    document.getElementById('upfile').value=''; document.getElementById('uptitle').value='';
+  } catch(e){ st.textContent='업로드 실패'; }
+  finally { btn.disabled = false; }
+}
+
+// ---- Account ----
+const acctEl = document.getElementById('acct');
+const acctModal = document.getElementById('acctmodal');
+function renderAccount(a){
+  document.getElementById('acctlabel').textContent = (a && a.display_name) ? a.display_name : '익명';
+}
+async function loadAccount(){
+  try {
+    const r = await fetch('/account', { headers: hdr() });
+    if(!r.ok) return;
+    const d = await r.json();
+    renderAccount(d.account || {});
+  } catch(e){ /* non-fatal */ }
+}
+let acctToken = '';
+acctEl.onclick = async () => {
+  const nm = document.getElementById('acctlabel').textContent.trim();
+  document.getElementById('acctname').value = nm === '익명' ? '' : nm;
+  document.getElementById('acctclaim').value = '';
+  acctModal.classList.add('open');
+  try { // refresh the restore code each open
+    const d = await (await fetch('/account', { headers: hdr() })).json();
+    acctToken = d.token || '';
+    document.getElementById('accttoken').textContent = acctToken || '(없음)';
+  } catch(e){ document.getElementById('accttoken').textContent = '(불러오기 실패)'; }
+};
+document.getElementById('accttokencopy').onclick = async () => {
+  try { await navigator.clipboard.writeText(acctToken); toast('복원 코드를 복사했어요'); }
+  catch(e){ toast('복사 실패 — 코드를 길게 눌러 직접 복사하세요'); }
+};
+document.getElementById('acctclaimbtn').onclick = async () => {
+  const token = document.getElementById('acctclaim').value.trim();
+  if(!token){ toast('복원 코드를 붙여넣어 주세요'); return; }
+  try {
+    const r = await fetch('/account/claim', {
+      method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({token})
+    });
+    if(!r.ok){ const e = await r.json().catch(()=>({})); toast(e.detail || '이어가기 실패 (' + r.status + ')'); return; }
+    const d = await r.json();
+    renderAccount(d.account || {});
+    acctModal.classList.remove('open');
+    toast('계정을 이어받았어요 — 진척을 불러옵니다');
+    refreshMastery();  // pull the merged account's progress into the dashboard/graph
+  } catch(e){ toast('이어가기 실패'); }
+};
+document.getElementById('acctcancel').onclick = () => acctModal.classList.remove('open');
+document.getElementById('acctsave').onclick = async () => {
+  const name = document.getElementById('acctname').value.trim();
+  try {
+    const r = await fetch('/account/name', {
+      method:'POST', headers: hdr({'Content-Type':'application/json'}),
+      body: JSON.stringify({name})
+    });
+    if(!r.ok){ toast('닉네임 저장 실패 (' + r.status + ')'); return; }
+    const d = await r.json();
+    renderAccount(d.account || {});
+    acctModal.classList.remove('open');
+    toast('닉네임을 저장했어요');
+  } catch(e){ toast('닉네임 저장 실패'); }
+};
+loadAccount();
+
+// ---- Conversation history ----
+const historyEl = document.getElementById('history');
+document.getElementById('historyopen').onclick = openHistory;
+document.getElementById('historyclose').onclick = () => showTab('chat');
+document.getElementById('newconv').onclick = newConversation;
+
+function shortTime(s){
+  if(!s) return '';
+  const t = new Date(s); if(isNaN(t)) return String(s).slice(0, 16).replace('T', ' ');
+  const diff = (Date.now() - t.getTime()) / 1000;
+  if(diff < 60) return '방금';
+  if(diff < 3600) return Math.floor(diff/60) + '분 전';
+  if(diff < 86400) return Math.floor(diff/3600) + '시간 전';
+  if(diff < 604800) return Math.floor(diff/86400) + '일 전';
+  return `${t.getMonth()+1}/${t.getDate()}`;
+}
+
+// Reset to an empty chat: drop stored session + conversation so next /chat starts fresh.
+function newConversation(){
+  localStorage.removeItem('rp_session');
+  localStorage.removeItem('rp_conv');
+  log.innerHTML = ONBOARD;
+  suggest.style.display = '';
+  document.getElementById('quizbar').style.display = 'none';
+  showTab('chat');
+  highlightConcepts([]);
+}
+
+async function openHistory(){
+  showTab('history');
+  loadConversations();
+}
+
+async function loadConversations(){
+  const body = document.getElementById('historybody');
+  body.innerHTML = '<div class="empty">불러오는 중…</div>';
+  try {
+    const r = await fetch('/conversations', { headers: hdr() });
+    if(!r.ok){ body.innerHTML = '<div class="empty">기록을 불러오지 못했어요.</div>'; return; }
+    const d = await r.json();
+    const convs = d.conversations || [];
+    if(!convs.length){ body.innerHTML = '<div class="empty">아직 대화 기록이 없어요.</div>'; return; }
+    body.innerHTML = '';
+    convs.forEach(c => {
+      const card = document.createElement('div'); card.className = 'convcard';
+      card.innerHTML =
+        `<div class="cmain"><div class="ctitle">${esc(c.title || '(제목 없음)')}</div>`+
+        `<div class="cmeta">${esc(shortTime(c.updated_at))} · ${c.msg_count||0}개 메시지</div></div>`+
+        `<div class="cdel" title="삭제">🗑</div>`;
+      card.querySelector('.cmain').onclick = () => resumeConversation(c.id);
+      card.querySelector('.cdel').onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
+      body.appendChild(card);
+    });
+  } catch(e){ body.innerHTML = '<div class="empty">기록을 불러오지 못했어요.</div>'; }
+}
+
+// Resume: set conversation_id, CLEAR session_id (server rehydrates context from DB), replay messages.
+async function resumeConversation(id){
+  try {
+    const r = await fetch('/conversations/' + encodeURIComponent(id), { headers: hdr() });
+    if(!r.ok){ toast('대화를 불러오지 못했어요 (' + r.status + ')'); return; }
+    const d = await r.json();
+    localStorage.setItem('rp_conv', id);
+    localStorage.removeItem('rp_session');
+    log.innerHTML = '';
+    (d.messages || []).forEach(m => {
+      if(m.role === 'user') addUser(m.content || '');
+      else addBotPlain(m.content || ''); // plain replay: no citations/mastery/graph side effects
+    });
+    if(!(d.messages || []).length) log.innerHTML = '<div class="empty">빈 대화입니다.</div>';
+    document.getElementById('quizbar').style.display = 'none';
+    showTab('chat');
+  } catch(e){ toast('대화를 불러오지 못했어요'); }
+}
+
+// Plain bot bubble for replayed history (no streaming, citations, notes, or side effects).
+function addBotPlain(text){
+  const wrap = document.createElement('div'); wrap.className = 'msg bot';
+  wrap.innerHTML = `<div class="bubble">${esc(text)}</div>`;
+  log.appendChild(wrap); log.scrollTop = log.scrollHeight;
+}
+
+async function deleteConversation(id){
+  try {
+    const r = await fetch('/conversations/' + encodeURIComponent(id), { method:'DELETE', headers: hdr() });
+    if(!r.ok){ toast('삭제 실패 (' + r.status + ')'); return; }
+    if(getConv() === id){ localStorage.removeItem('rp_conv'); localStorage.removeItem('rp_session'); }
+    loadConversations();
+    toast('삭제했어요');
+  } catch(e){ toast('삭제 실패'); }
+}
+
+// ---- Analytics ----
+const statsModal = document.getElementById('statsmodal');
+document.getElementById('historystats').onclick = openStats;
+document.getElementById('statsclose').onclick = () => statsModal.classList.remove('open');
+
+async function openStats(){
+  const body = document.getElementById('statsbody');
+  body.innerHTML = '<div class="empty">불러오는 중…</div>';
+  statsModal.classList.add('open');
+  try {
+    const r = await fetch('/analytics', { headers: hdr() });
+    if(!r.ok){ body.innerHTML = '<div class="empty">통계를 불러오지 못했어요.</div>'; return; }
+    const d = await r.json();
+    const e = d.engagement || {};
+    const cells = [
+      ['사용자', e.users], ['기기', e.devices], ['대화', e.conversations],
+      ['메시지', e.messages], ['노트', e.notes]
+    ].filter(([,v]) => v != null)
+     .map(([k,v]) => `<div class="cell"><b>${v}</b><span>${k}</span></div>`).join('');
+    const cohort = (d.cohort_concepts || []).slice(0, 5).map(c =>
+      `<div class="cohort-row"><span>${esc(c.concept_id||'')}</span>`+
+      `<span>평균 ${Math.round((c.avg_score||0)*100)/100} · 학습자 ${c.learners||0}</span></div>`
+    ).join('');
+    body.innerHTML =
+      `<div class="stat-grid">${cells}</div>` +
+      (cohort ? `<div class="nu-title">코호트 상위 개념</div>${cohort}` : '');
+  } catch(e){ body.innerHTML = '<div class="empty">통계를 불러오지 못했어요.</div>'; }
+}
+
+// ---- Metrics (unobtrusive observability footer) ----
+fetch('/metrics').then(r => r.ok ? r.json() : null).then(m => {
+  if(!m) return;
+  document.getElementById('metrics').textContent = `p95 ${Math.round(m.p95_latency_ms)}ms · 요청 ${m.count}건`;
+}).catch(()=>{});
+</script>
+</body>
+</html>

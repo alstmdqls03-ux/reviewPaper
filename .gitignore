@@ -1,0 +1,15 @@
+.env
+.DS_Store
+file_cache.json
+__pycache__/
+*.pyc
+venv/
+.venv/
+.playwright-mcp/
+*.png
+mastery.db
+app.db
+data/
+corpus.json
+text_cache/
+uploads/

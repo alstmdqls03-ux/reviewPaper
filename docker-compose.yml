@@ -1,0 +1,38 @@
+# Modern compose spec (no version: key).
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env                      # ANTHROPIC_API_KEY, APP_SECRET, ADMIN_TOKEN, ...
+    environment:
+      - MOCK_LLM=${MOCK_LLM:-0}   # host passthrough; set MOCK_LLM=1 to run offline
+    # The app resolves its state relative to WORKDIR (/app), so we bind each
+    # mutable path onto its real default location under ./data on the host.
+    # NOTE: Docker creates a MISSING bind source as a directory, which breaks
+    # the .db mounts. Pre-create the files once so they mount as files:
+    #   mkdir -p data/text_cache data/uploads
+    #   touch data/mastery.db data/app.db data/corpus.json
+    volumes:
+      - ./data/mastery.db:/app/mastery.db
+      - ./data/app.db:/app/app.db
+      - ./data/corpus.json:/app/corpus.json
+      - ./data/text_cache:/app/text_cache
+      - ./data/uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Enable when you move to multi-worker sessions (shared session/rate-limit
+  # state across uvicorn workers). Until then a single worker keeps state
+  # in-process and this is dead weight.
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   restart: unless-stopped

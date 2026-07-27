@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      MOCK_LLM: "1"
+      BASE_URL: "http://127.0.0.1:8000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: obs self-check
+        run: python obs.py
+
+      - name: Unit tests
+        run: pytest -q --ignore=test_injection.py
+
+      - name: Start MOCK server
+        run: |
+          python app.py &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf "$BASE_URL/graph" >/dev/null 2>&1; then
+              echo "server up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "server never came up"; exit 1
+
+      - name: Gold-set eval (gate)
+        run: python eval_gold.py
+
+      - name: Injection / safety tests
+        run: pytest -q test_injection.py
+
+      - name: Stop server
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
