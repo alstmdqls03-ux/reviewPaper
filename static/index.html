@@ -520,6 +520,7 @@ function newBotBubble(){
 async function send(){
   const q = document.getElementById('q');
   const text = q.value.trim(); if(!text) return;
+  if(SOURCES.length && !selectedIds().length){ toast('소스를 1개 이상 선택하세요'); return; }
   const empty = log.querySelector('.empty'); if(empty) empty.remove();
   addUser(text); q.value='';
   const btn = document.getElementById('send'); btn.disabled = true;
@@ -950,29 +951,61 @@ async function refreshMastery(){
   } catch(e){ /* non-fatal */ }
 }
 
-// ---- 소스 목록 ----
+// ---- 소스 목록 + 선택 ----
 let SOURCES = [];  // [{id, title}] as returned by GET /corpus
+
+// rp_sources = 명시적으로 선택된 id 배열. 키가 없으면 "전부 선택" (기본값).
+// ponytail: null=전체 이므로 새로 올라온 논문은 자동으로 체크된 상태가 된다.
+function getSelected(){
+  try { const v = JSON.parse(localStorage.getItem('rp_sources')); return Array.isArray(v) ? v : null; }
+  catch(e){ return null; }
+}
+function setSelected(ids){ localStorage.setItem('rp_sources', JSON.stringify(ids)); }
+function selectedIds(){
+  const sel = getSelected(), all = SOURCES.map(s => s.id);
+  return sel === null ? all : all.filter(id => sel.includes(id));
+}
 
 async function loadSources(){
   const body = document.getElementById('sourcesbody');
+  const prev = new Set(SOURCES.map(s => s.id));
   try {
     const r = await fetch('/corpus', { headers: hdr() });
     if(!r.ok){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; return; }
     SOURCES = (await r.json()).sources || [];
+    const sel = getSelected();
+    if(sel && prev.size){  // 선택을 이미 손댄 상태라면, 새로 올라온 소스는 체크해서 들어온다
+      const fresh = SOURCES.map(s => s.id).filter(id => !prev.has(id));
+      if(fresh.length) setSelected([...sel, ...fresh]);
+    }
     renderSources();
   } catch(e){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; }
 }
 
 function renderSources(){
   const body = document.getElementById('sourcesbody');
-  document.getElementById('srccount').textContent = `${SOURCES.length}편`;
+  const on = new Set(selectedIds());
+  document.getElementById('srccount').textContent = `${on.size} / ${SOURCES.length}편 선택`;
   if(!SOURCES.length){ body.innerHTML = '<div class="empty">아직 소스가 없어요. “논문 추가”로 PDF를 올려보세요.</div>'; return; }
   body.innerHTML = '';
   SOURCES.forEach(s => {
-    const row = document.createElement('div'); row.className = 'srcitem'; row.dataset.id = s.id;
-    row.innerHTML = `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>`;
+    const row = document.createElement('div');
+    row.className = 'srcitem' + (on.has(s.id) ? '' : ' off'); row.dataset.id = s.id;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = on.has(s.id);
+    cb.setAttribute('aria-label', s.title);
+    cb.onchange = onSourceToggle;
+    row.appendChild(cb);
+    row.insertAdjacentHTML('beforeend', `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>`);
     body.appendChild(row);
   });
+}
+
+function onSourceToggle(){
+  const ids = [...document.querySelectorAll('#sourcesbody .srcitem')]
+    .filter(r => r.querySelector('input').checked).map(r => r.dataset.id);
+  setSelected(ids);
+  renderSources();
 }
 
 document.getElementById('sourcesopen').onclick = () => { showTab('sources'); loadSources(); };
