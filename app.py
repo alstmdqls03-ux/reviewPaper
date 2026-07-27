@@ -258,6 +258,9 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                             cache_write_tokens=payload.get("cache_write_tokens", 0)))
                     else:
                         payload["source_id"] = title_to_id.get(payload.get("title") or "")
+                        # 각주가 답변의 몇 번째 글자 뒤에 붙었는지. 이게 없어서 대화를
+                        # 다시 열면 각주가 전부 답변 끝에 뭉쳐 있었다 (실패경계 §4-3).
+                        payload["offset"] = sum(len(p) for p in parts)
                         citations.append(payload)
                         yield _sse({"type": "citation", "citation": payload})
                 answer = "".join(parts)

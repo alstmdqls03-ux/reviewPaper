@@ -160,14 +160,23 @@ async def _mock_stream(messages: list):
         f"[데모 응답] 질문하신 내용은 리뷰 논문들에서 {labels[0]} 관점으로 다뤄집니다. {link}"
         f"실제 답변은 API 키를 넣으면 원문 페이지 인용과 함께 생성됩니다."
     )
-    for word in answer.split(" "):
+    def _cite(n, page):
+        return ("citation", {
+            "title": (picked[min(n, len(picked) - 1)].get("sources") or ["Review paper"])[0],
+            "start_page": page, "end_page": page,
+            "cited_text": f"...{labels[min(n, len(labels) - 1)]} is discussed across the corpus...",
+        })
+
+    # 실제 인용은 문장 중간중간에 도착한다. 예전 목은 본문을 다 흘린 뒤 끝에 1건만
+    # 내보내서, "각주 위치 복원"을 오프라인에서 판정할 수 없었다.
+    words = answer.split(" ")
+    marks = {max(1, len(words) // 3): 0, max(2, (2 * len(words)) // 3): 1}
+    for i, word in enumerate(words):
         yield ("text", word + " ")
+        if i in marks:
+            yield _cite(marks[i], 3 + marks[i] * 4)
         await asyncio.sleep(0.01)
-    yield ("citation", {
-        "title": picked[0]["sources"][0] if picked[0].get("sources") else "Review paper",
-        "start_page": 3, "end_page": 3,
-        "cited_text": f"...{labels[0]} is a central theme discussed across the corpus...",
-    })
+    yield _cite(len(picked) - 1, 12)
 
 
 # ---- Quiz generation ----------------------------------------------------------

@@ -1745,13 +1745,29 @@ async function resumeConversation(id, title){
   } catch(e){ toast('대화를 불러오지 못했어요'); }
 }
 
-// 저장된 답변을 다시 그린다. 스트리밍이 아니라 각주 위치를 문장 안에 되돌릴 수는 없어서
-// 각주는 답변 끝에 모아 붙는다 — 출처 행과 원문 열기는 실시간 답변과 똑같이 동작한다.
+// 저장된 답변을 다시 그린다. 각 인용의 offset(그 각주가 붙은 시점까지 온 글자 수)만큼
+// 본문을 흘려보낸 뒤 각주를 찍으므로, 각주가 실시간 답변과 같은 자리에 붙는다.
+// offset이 없는 옛 메시지는 예전처럼 끝에 모아 붙는다 (v5 이전 대화도 그대로 열린다).
 function addBotReplay(text, meta){
   const bot = newBotBubble();
   if(meta && meta.sources) bot.usedSources(meta.sources);
-  if(text) bot.text(text);
-  ((meta && meta.citations) || []).forEach(c => bot.citation(c));
+  const cites = ((meta && meta.citations) || []).slice();
+  const positioned = cites.filter(c => Number.isInteger(c.offset));
+  if(!positioned.length){
+    if(text) bot.text(text);
+    cites.forEach(c => bot.citation(c));
+  } else {
+    positioned.sort((a, b) => a.offset - b.offset);
+    let at = 0;
+    positioned.forEach(c => {
+      const cut = Math.max(at, Math.min(c.offset, text.length));
+      if(cut > at) bot.text(text.slice(at, cut));
+      bot.citation(c);
+      at = cut;
+    });
+    if(at < text.length) bot.text(text.slice(at));
+    cites.filter(c => !Number.isInteger(c.offset)).forEach(c => bot.citation(c)); // 섞여 있으면 나머지는 끝에
+  }
   bot.done([]);
 }
 
