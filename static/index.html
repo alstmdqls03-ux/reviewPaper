@@ -182,6 +182,15 @@
   .srcitem .stitle { flex: 1; min-width: 0; font-size: 14px; color: var(--on); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .srcitem.off .stitle { color: var(--ink-faint); }
   .sbadge { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: var(--ink-faint); border: 1px solid var(--hairline); border-radius: var(--radius-pill); padding: 3px 8px; }
+  .srcact { flex-shrink: 0; display: flex; gap: 2px; }
+  .srcact span { padding: 4px 6px; font-size: 13px; color: var(--on-mute); cursor: pointer; border-radius: var(--radius-sm); transition: color .15s ease; }
+  .srcact span:hover { color: var(--on); }
+  .srcact span.del:hover { color: var(--danger); }
+  .srcsort { padding: 8px 10px; font-size: 12px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-pill); cursor: pointer; }
+  .srcitem.pending { opacity: .6; }
+  .srcitem.pending .stitle::after { content: ' · 처리 중…'; color: var(--ink-faint); font-size: 11px; }
+  .srcerr { border: 1px solid rgba(255,90,90,.45); color: var(--danger); border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 10px; font-size: 13px; }
+  .srcrename { flex: 1; min-width: 0; padding: 6px 10px; font-size: 14px; font-family: var(--sans); color: var(--on); background: var(--canvas); border: 1px solid var(--on); border-radius: var(--radius-sm); }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 20; }
   .modal.open { display: flex; }
   .modalcard { background: var(--canvas-soft); border-radius: var(--radius-md); padding: 22px; width: 320px; max-width: 90%; border: 1px solid var(--hairline); }
@@ -274,6 +283,13 @@
       <div class="tabpane" data-pane="sources" id="sources">
         <div class="pane-toolbar">
           <span id="srccount" class="srccount"></span>
+          <button type="button" class="ghostbtn" id="srcall">전체 선택</button>
+          <button type="button" class="ghostbtn" id="srcnone">전체 해제</button>
+          <select id="srcsort" class="srcsort" aria-label="소스 정렬">
+            <option value="added">추가순</option>
+            <option value="title">제목순</option>
+            <option value="mine">내 업로드 먼저</option>
+          </select>
           <button type="button" class="ghostbtn" id="srcadd"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>논문 추가</button>
           <button type="button" class="ghostbtn" id="srcclose">대화로</button>
         </div>
@@ -969,7 +985,8 @@ async function refreshMastery(){
 }
 
 // ---- 소스 목록 + 선택 ----
-let SOURCES = [];  // [{id, title}] as returned by GET /corpus
+let SOURCES = [];  // [{id, title, mine, added_at}] as returned by GET /corpus
+let SRC_MAX = 0;   // 사용자당 업로드 상한 (서버 설정)
 
 // rp_sources = 명시적으로 선택된 id 배열. 키가 없으면 "전부 선택" (기본값).
 // ponytail: null=전체 이므로 새로 올라온 논문은 자동으로 체크된 상태가 된다.
@@ -989,7 +1006,9 @@ async function loadSources(){
   try {
     const r = await fetch('/corpus', { headers: hdr() });
     if(!r.ok){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; return; }
-    SOURCES = (await r.json()).sources || [];
+    const d = await r.json();
+    SOURCES = d.sources || [];
+    SRC_MAX = d.max_sources || 0;
     const sel = getSelected();
     if(sel && prev.size){  // 선택을 이미 손댄 상태라면, 새로 올라온 소스는 체크해서 들어온다
       const fresh = SOURCES.map(s => s.id).filter(id => !prev.has(id));
@@ -999,13 +1018,38 @@ async function loadSources(){
   } catch(e){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; }
 }
 
+let SRC_PENDING = null;   // {title} — 업로드 처리 중인 가짜 행
+let SRC_ERROR = '';       // 소스 패널 상단에 띄울 실패 사유
+
+const SRC_SORTS = {
+  added: (a, b) => (a.added_at || 0) - (b.added_at || 0),
+  title: (a, b) => a.title.localeCompare(b.title, 'ko'),
+  mine:  (a, b) => (b.mine ? 1 : 0) - (a.mine ? 1 : 0) || a.title.localeCompare(b.title, 'ko'),
+};
+function sortedSources(){
+  const key = document.getElementById('srcsort').value;
+  return [...SOURCES].sort(SRC_SORTS[key] || SRC_SORTS.added);
+}
+
 function renderSources(){
   const body = document.getElementById('sourcesbody');
   const on = new Set(selectedIds());
-  document.getElementById('srccount').textContent = `${on.size} / ${SOURCES.length}편 선택`;
-  if(!SOURCES.length){ body.innerHTML = '<div class="empty">아직 소스가 없어요. “논문 추가”로 PDF를 올려보세요.</div>'; return; }
+  const owned = SOURCES.filter(s => s.mine).length;
+  document.getElementById('srccount').textContent =
+    `${on.size} / ${SOURCES.length}편 선택` + (SRC_MAX ? ` · 내 업로드 ${owned}/${SRC_MAX}` : '');
   body.innerHTML = '';
-  SOURCES.forEach(s => {
+  if(SRC_ERROR) body.insertAdjacentHTML('beforeend', `<div class="srcerr">${esc(SRC_ERROR)}</div>`);
+  if(SRC_PENDING){
+    body.insertAdjacentHTML('beforeend',
+      `<div class="srcitem pending"><input type="checkbox" disabled>`+
+      `<div class="stitle">${esc(SRC_PENDING.title)}</div><span class="sbadge">업로드</span></div>`);
+  }
+  if(!SOURCES.length && !SRC_PENDING){
+    body.insertAdjacentHTML('beforeend',
+      '<div class="empty">아직 소스가 없어요. “논문 추가”로 PDF를 올려보세요.</div>');
+    return;
+  }
+  sortedSources().forEach(s => {
     const row = document.createElement('div');
     row.className = 'srcitem' + (on.has(s.id) ? '' : ' off'); row.dataset.id = s.id;
     const cb = document.createElement('input');
@@ -1015,21 +1059,78 @@ function renderSources(){
     row.appendChild(cb);
     row.insertAdjacentHTML('beforeend',
       `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>` +
-      `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>`);
+      `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>` +
+      // 공용 논문은 남들도 보는 것이라 이름 변경·삭제 버튼 자체를 주지 않는다
+      (s.mine ? `<span class="srcact"><span class="ren" title="이름 바꾸기">✎</span>`+
+                `<span class="del" title="삭제">🗑</span></span>` : ''));
+    if(s.mine){
+      row.querySelector('.ren').onclick = () => startRename(row, s);
+      row.querySelector('.del').onclick = () => deleteSource(s);
+    }
     body.appendChild(row);
   });
 }
 
 function onSourceToggle(){
-  const ids = [...document.querySelectorAll('#sourcesbody .srcitem')]
+  const ids = [...document.querySelectorAll('#sourcesbody .srcitem:not(.pending)')]
     .filter(r => r.querySelector('input').checked).map(r => r.dataset.id);
   setSelected(ids);
   renderSources();
 }
 
-document.getElementById('sourcesopen').onclick = () => { showTab('sources'); loadSources(); };
+// 인라인 이름 바꾸기: 제목을 입력창으로 바꾸고 Enter 저장 / Esc 취소.
+function startRename(row, s){
+  const cell = row.querySelector('.stitle');
+  const input = document.createElement('input');
+  input.className = 'srcrename'; input.value = s.title; input.maxLength = 200;
+  cell.replaceWith(input); input.focus(); input.select();
+  const cancel = () => renderSources();
+  input.onkeydown = e => {
+    if(e.key === 'Enter') commit();
+    else if(e.key === 'Escape') cancel();
+  };
+  input.onblur = cancel;
+  async function commit(){
+    const name = input.value.trim();
+    input.onblur = null;
+    if(!name || name === s.title) return cancel();
+    try {
+      const r = await fetch('/corpus/' + encodeURIComponent(s.id), {
+        method:'PATCH', headers: hdr({'Content-Type':'application/json'}),
+        body: JSON.stringify({name})
+      });
+      if(!r.ok){ SRC_ERROR = await errText(r, '이름을 바꾸지 못했어요'); renderSources(); return; }
+      toast('이름을 바꿨어요');
+      await loadSources();
+    } catch(e){ SRC_ERROR = '이름을 바꾸지 못했어요 (네트워크)'; renderSources(); }
+  }
+}
+
+async function deleteSource(s){
+  if(!confirm(`"${s.title}"을(를) 삭제할까요? 이 소스를 근거로 한 이후 답변에서 빠집니다.`)) return;
+  try {
+    const r = await fetch('/corpus/' + encodeURIComponent(s.id), { method:'DELETE', headers: hdr() });
+    if(!r.ok){ SRC_ERROR = await errText(r, '삭제하지 못했어요'); renderSources(); return; }
+    const sel = getSelected();
+    if(sel) setSelected(sel.filter(id => id !== s.id));  // 선택 목록에서도 같이 빠진다
+    SRC_ERROR = '';
+    toast('소스를 삭제했어요');
+    await loadSources();
+  } catch(e){ SRC_ERROR = '삭제하지 못했어요 (네트워크)'; renderSources(); }
+}
+
+// 서버가 준 사유를 그대로 보여준다 — "실패 (409)"보다 "최대 50편" 쪽이 고칠 수 있는 정보다.
+async function errText(r, fallback){
+  try { const d = await r.json(); if(d.detail) return d.detail; } catch(e){}
+  return `${fallback} (${r.status})`;
+}
+
+document.getElementById('sourcesopen').onclick = () => { SRC_ERROR=''; showTab('sources'); loadSources(); };
 document.getElementById('srcclose').onclick = () => showTab('chat');
 document.getElementById('srcadd').onclick = () => { document.getElementById('uploadopen').click(); };
+document.getElementById('srcall').onclick = () => { setSelected(SOURCES.map(s=>s.id)); renderSources(); };
+document.getElementById('srcnone').onclick = () => { setSelected([]); renderSources(); };
+document.getElementById('srcsort').onchange = renderSources;
 loadSources();
 
 // ---- Notes ----
@@ -1100,20 +1201,28 @@ async function doUpload(){
   const title = document.getElementById('uptitle').value.trim();
   const st = document.getElementById('upstatus');
   if(!f){ st.textContent='PDF 파일을 선택하세요.'; return; }
+  if(!/\.pdf$/i.test(f.name)){ st.textContent='PDF 파일만 추가할 수 있어요.'; return; }
   const fd = new FormData();
   fd.append('file', f);
   fd.append('title', title || f.name);
   const btn = document.getElementById('upsubmit'); btn.disabled = true; st.textContent='업로드 중…';
+  SRC_ERROR = ''; SRC_PENDING = { title: title || f.name }; renderSources();  // 목록에 "처리 중" 행
   try {
-    const r = await fetch('/upload', { method:'POST', body: fd }); // no device header (per spec)
-    if(!r.ok){ st.textContent='업로드 실패 (' + r.status + ')'; return; }
+    const r = await fetch('/upload', { method:'POST', headers: hdr(), body: fd });
+    if(!r.ok){
+      const msg = await errText(r, '업로드 실패');
+      st.textContent = msg; SRC_ERROR = msg; return;
+    }
     const d = await r.json();
-    st.textContent = `논문 추가됨 · 코퍼스 ${d.corpus_size}편`;
-    toast(`논문 추가됨 · 코퍼스 ${d.corpus_size}편`);
+    st.textContent = `논문 추가됨 · 코퍼스 ${d.corpus_size}편 · 내 업로드 ${d.owned}/${d.max_sources}`;
+    toast(`논문 추가됨 · 코퍼스 ${d.corpus_size}편 · 내 업로드 ${d.owned}/${d.max_sources}`);
     document.getElementById('upfile').value=''; document.getElementById('uptitle').value='';
+  } catch(e){ st.textContent='업로드 실패 (네트워크)'; SRC_ERROR='업로드 실패 (네트워크)'; }
+  finally {
+    btn.disabled = false;
+    SRC_PENDING = null;
     await loadSources();  // 소스 목록에 즉시 반영 (새로고침 없이)
-  } catch(e){ st.textContent='업로드 실패'; }
-  finally { btn.disabled = false; }
+  }
 }
 
 // ---- Account ----

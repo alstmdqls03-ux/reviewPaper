@@ -391,24 +391,54 @@ async def get_corpus(x_device_id: str = Header(None)):
     Order = registry order (stable), so the UI list doesn't reshuffle."""
     uid = learner(x_device_id)
     return {"sources": [{"id": e["id"], "title": e["title"], "owner": e.get("owner"),
-                         "mine": e.get("owner") == uid}
-                        for e in corpus.visible_corpus(uid)]}
+                         "mine": e.get("owner") == uid, "added_at": e.get("added_at")}
+                        for e in corpus.visible_corpus(uid)],
+            "owned": corpus.owned_count(uid), "max_sources": settings.MAX_SOURCES}
+
+
+@app.delete("/corpus/{sid}")
+async def delete_source(sid: str, x_device_id: str = Header(None)):
+    """Delete one of your own uploads. Shared seed papers are not deletable."""
+    hit = corpus.remove(sid, learner(x_device_id))
+    if hit is None:
+        raise HTTPException(404, "내가 올린 소스만 삭제할 수 있어요.")
+    return {"ok": True, "id": sid, "title": hit["title"]}
+
+
+@app.patch("/corpus/{sid}")
+async def rename_source(sid: str, body: NameIn, x_device_id: str = Header(None)):
+    """Retitle one of your own uploads. The title is what answers cite it by."""
+    hit = corpus.rename(sid, body.name, learner(x_device_id))
+    if hit is None:
+        raise HTTPException(404, "내가 올린 소스만 이름을 바꿀 수 있어요.")
+    return {"ok": True, "id": sid, "title": hit["title"]}
 
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...), title: str = Form(...),
                  x_device_id: str = Header(None)):
     contents = await file.read()
+    if not contents:
+        raise HTTPException(400, "빈 파일이에요. PDF를 다시 선택해 주세요.")
+    if not contents.startswith(b"%PDF"):
+        # Trust the bytes, not the extension — a renamed .docx would fail later at extraction.
+        raise HTTPException(415, "PDF 파일만 추가할 수 있어요.")
     try:
         check_upload_size(len(contents), settings.MAX_UPLOAD_MB)
     except ValueError as e:
         raise HTTPException(413, str(e))
     owner = learner(x_device_id)
+    if corpus.owned_count(owner) >= settings.MAX_SOURCES:
+        raise HTTPException(409, f"소스는 최대 {settings.MAX_SOURCES}편까지 추가할 수 있어요. "
+                                 "먼저 사용하지 않는 소스를 삭제해 주세요.")
     # Per-owner directory: two users uploading "paper.pdf" must not overwrite each other.
     dest_dir = UPLOADS / owner
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / Path(file.filename).name
     dest.write_bytes(contents)
+    # Re-uploading the same filename replaces the bytes, so drop the cached page text
+    # or BM25/citations would keep serving the old document's pages.
+    Path("text_cache", dest.stem + ".json").unlink(missing_ok=True)
     corpus.add_pdf(str(dest), title, owner=owner)
     corpus._reset_index()
     regenerated = "skipped (mock or no key)"
@@ -419,6 +449,7 @@ async def upload(file: UploadFile = File(...), title: str = Form(...),
         # only — one user's upload must not rewrite everyone else's map.
         regenerated = corpus.regenerate_graph()
     return {"corpus_size": len(corpus.visible_corpus(owner)), "title": title,
+            "owned": corpus.owned_count(owner), "max_sources": settings.MAX_SOURCES,
             "regenerated": regenerated}
 
 

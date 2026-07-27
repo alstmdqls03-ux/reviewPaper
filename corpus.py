@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -63,10 +64,53 @@ def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
     for e in reg:
         if e["path"] == path:
             return e  # already registered; upload happens lazily via ensure_uploaded
-    entry = {"id": source_id(path), "path": path, "title": title, "owner": owner}
+    entry = {"id": source_id(path), "path": path, "title": title, "owner": owner,
+             "added_at": time.time()}
     reg.append(entry)
-    _CORPUS.write_text(json.dumps(reg, indent=2))
+    _save(reg)
     return entry
+
+
+def _save(reg: list[dict]) -> None:
+    _CORPUS.write_text(json.dumps(reg, indent=2))
+
+
+def remove(sid: str, owner: str) -> dict | None:
+    """Delete an entry the caller OWNS. Returns it, or None if missing/not theirs.
+
+    Shared seed papers (owner=None) are never deletable — one user must not be able
+    to empty the corpus for everyone. The PDF on disk goes too; its cached page text
+    is dropped so a re-upload of the same name re-extracts rather than serving stale text.
+    """
+    reg = load_corpus()
+    hit = next((e for e in reg if e["id"] == sid and e.get("owner") == owner and owner), None)
+    if hit is None:
+        return None
+    _save([e for e in reg if e["id"] != sid])
+    for p in (Path(hit["path"]), _TEXT_CACHE_DIR / (Path(hit["path"]).stem + ".json")):
+        p.unlink(missing_ok=True)
+    _reset_index()
+    return hit
+
+
+def rename(sid: str, title: str, owner: str) -> dict | None:
+    """Retitle an entry the caller OWNS. The title is what the model cites, so this
+    changes how the source is named in future answers (past answers keep the old one)."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    reg = load_corpus()
+    hit = next((e for e in reg if e["id"] == sid and e.get("owner") == owner and owner), None)
+    if hit is None:
+        return None
+    hit["title"] = title[:200]
+    _save(reg)
+    _reset_index()
+    return hit
+
+
+def owned_count(owner: str) -> int:
+    return sum(1 for e in load_corpus() if e.get("owner") == owner)
 
 
 def corpus_papers() -> list[tuple]:
@@ -226,8 +270,10 @@ if __name__ == "__main__":
 
         # (b) add_pdf dedupes and persists
         e1 = add_pdf("papers/zz-new.pdf", "New Paper")
-        assert e1 == {"id": source_id("papers/zz-new.pdf"),
-                      "path": "papers/zz-new.pdf", "title": "New Paper", "owner": None}
+        assert {k: e1[k] for k in ("id", "path", "title", "owner")} == {
+            "id": source_id("papers/zz-new.pdf"), "path": "papers/zz-new.pdf",
+            "title": "New Paper", "owner": None}
+        assert e1["added_at"] > 0
         assert len({e["id"] for e in load_corpus()}) == len(load_corpus()), "ids must be unique"
 
         assert len(load_corpus()) == n0 + 1
@@ -245,6 +291,22 @@ if __name__ == "__main__":
         assert {e["title"] for e in visible_corpus(None)} == {e["title"] for e in load_corpus()
                                                              if e.get("owner") is None}
         assert "Alice's paper" not in {t for _, t in shared_papers()}, "graph must skip uploads"
+        assert owned_count("userA") == 1 and owned_count("userB") == 1
+
+        # (b3) rename/remove are owner-gated; shared seeds are untouchable
+        alice_id = next(e["id"] for e in load_corpus() if e["title"] == "Alice's paper")
+        assert rename(alice_id, "Renamed", owner="userB") is None, "userB renamed userA's source"
+        assert remove(alice_id, owner="userB") is None, "userB deleted userA's source"
+        assert rename(alice_id, "Renamed", owner="userA")["title"] == "Renamed"
+        assert "Renamed" in {e["title"] for e in visible_corpus("userA")}
+        assert rename(alice_id, "   ", owner="userA") is None, "blank title rejected"
+        seed_id = load_corpus()[0]["id"]
+        assert remove(seed_id, owner="userA") is None, "shared seed must not be deletable"
+        n_before = len(load_corpus())
+        assert remove(alice_id, owner="userA")["id"] == alice_id
+        assert len(load_corpus()) == n_before - 1
+        assert remove(alice_id, owner="userA") is None, "double delete must be a no-op"
+        assert owned_count("userA") == 0
 
         # (c) bm25 ranks the obviously-relevant toy doc first
         docs = [

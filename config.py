@@ -17,6 +17,7 @@ class Settings:
         self.RATE_WINDOW = int(os.getenv("RATE_WINDOW", "60"))    # seconds
         self.MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "4000"))
         self.MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+        self.MAX_SOURCES = int(os.getenv("MAX_SOURCES", "50"))    # per user, own uploads only
         self.MOCK = os.getenv("MOCK_LLM") == "1"
         self.APP_SECRET = os.getenv("APP_SECRET", "dev-only-insecure-change-me")
         self.ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")  # empty => admin open in dev
@@ -34,6 +35,7 @@ class Settings:
             "rate_window": self.RATE_WINDOW,
             "max_message_chars": self.MAX_MESSAGE_CHARS,
             "max_upload_mb": self.MAX_UPLOAD_MB,
+            "max_sources": self.MAX_SOURCES,
             "mock": self.MOCK,
             "admin_auth_enabled": bool(self.ADMIN_TOKEN),
         }
@@ -44,13 +46,13 @@ settings = Settings()
 
 if __name__ == "__main__":
     # defaults load — isolate from ambient env (e.g. MOCK_LLM=1 in the shell)
-    for _k in ("MODEL", "SESSION_TTL", "RATE_LIMIT", "RATE_WINDOW",
+    for _k in ("MODEL", "SESSION_TTL", "RATE_LIMIT", "RATE_WINDOW", "MAX_SOURCES",
                "MAX_MESSAGE_CHARS", "MAX_UPLOAD_MB", "MOCK_LLM", "ADMIN_TOKEN"):
         os.environ.pop(_k, None)
     s = Settings()
     assert s.MODEL == "claude-opus-4-8"
     assert s.SESSION_TTL == 1800 and s.RATE_LIMIT == 30 and s.RATE_WINDOW == 60
-    assert s.MAX_MESSAGE_CHARS == 4000 and s.MAX_UPLOAD_MB == 50
+    assert s.MAX_MESSAGE_CHARS == 4000 and s.MAX_UPLOAD_MB == 50 and s.MAX_SOURCES == 50
     assert s.MOCK is False and s.ADMIN_TOKEN == ""
 
     # env override works on re-instantiation
