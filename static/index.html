@@ -53,7 +53,17 @@
   .bot .bubble { background: var(--canvas-soft); border: 1px solid var(--hairline); color: var(--on-mute); border-bottom-left-radius: 6px; }
   .bot .bubble.err { background: var(--canvas-soft); color: var(--danger); border-color: rgba(255,90,90,.45); }
   .cite { font-size: 11px; vertical-align: super; color: var(--on); cursor: help; margin: 0 1px; font-weight: 700; letter-spacing: .5px; }
-  .usedsrc { font-size: 11px; color: var(--ink-faint); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .7px; line-height: 1.5; }
+  /* "사용한 소스" — 접힌 상태가 기본. 매 답변마다 논문 10편 제목을 펼쳐두면
+     라벨이 답변보다 커진다(실측 116px vs 74px). 요약 한 줄만 두고 클릭 시 펼친다. */
+  .usedsrc { font-size: 11px; color: var(--ink-faint); margin-bottom: 6px; letter-spacing: .7px; line-height: 1.5; }
+  .usedsrc summary { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; list-style: none;
+                     text-transform: uppercase; padding: 2px 0; }
+  .usedsrc summary::-webkit-details-marker { display: none; }
+  .usedsrc summary::after { content: '▾'; font-size: 9px; transition: transform .15s ease; }
+  .usedsrc[open] summary::after { transform: rotate(180deg); }
+  .usedsrc summary:hover { color: var(--on); }
+  .usedsrc ol { margin: 4px 0 0; padding-left: 20px; text-transform: none; letter-spacing: normal;
+                font-size: 11.5px; line-height: 1.6; color: var(--on-mute); }
   .sources { margin-top: 8px; font-size: 11px; color: var(--on-mute); }
   .srcrow { border-top: 1px solid var(--hairline); }
   .srchead { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 6px 0; cursor: pointer; }
@@ -624,7 +634,7 @@ function addUser(text){
 // Builds a streaming bot bubble; returns handlers to feed it incrementally.
 function newBotBubble(){
   const wrap = document.createElement('div'); wrap.className='msg bot';
-  const usedBox = document.createElement('div'); usedBox.className='usedsrc'; usedBox.style.display='none';
+  const usedBox = document.createElement('details'); usedBox.className='usedsrc'; usedBox.style.display='none';
   const bubble = document.createElement('div'); bubble.className='bubble cursor';
   const srcBox = document.createElement('div'); srcBox.className='sources'; srcBox.style.display='none';
   const noteBtn = document.createElement('button');
@@ -661,11 +671,13 @@ function newBotBubble(){
   });
   bubble.addEventListener('mouseout', e => { if(e.target.closest('.cite')) hideCitePop(); });
   return {
-    // "사용한 소스" — 이 답변이 실제로 읽은 논문 목록 (체크된 소스와 일치)
+    // "보낸 소스" — 이 답변을 만들 때 모델에 넘긴 논문 목록.
+    // "사용한"이 아니라 "보낸"이다: 모델이 그중 무엇을 실제로 인용했는지는 각주가 말한다.
+    // 접힌 요약 한 줄이 기본이고, 제목 전문은 <details>를 열어야 나온다.
     usedSources(titles){
       if(!titles || !titles.length) return;
-      usedBox.textContent = '사용한 소스: ' + titles.join(' · ');
-      usedBox.title = titles.join('\n');
+      usedBox.innerHTML = `<summary>보낸 소스 ${titles.length}편</summary><ol>` +
+        titles.map(t => `<li>${esc(t)}</li>`).join('') + '</ol>';
       usedBox.style.display = '';
     },
     text(delta){
