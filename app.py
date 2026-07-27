@@ -128,12 +128,18 @@ def _pick_sources(sources: list[str] | None,
 
     Scoped to what `user_id` may see (shared papers + their own uploads), so a
     selection can never reach into someone else's PDF even if its id is guessed.
-    None/empty selection = everything visible. Titles come from the registry so the
-    'used sources' line is honest even in MOCK mode, where nothing is uploaded.
+    sources=None means "no selection sent" = everything visible. An EMPTY list is a
+    real selection of nothing and raises — it used to fall through to `or reg` and
+    silently answer from all 10 papers right after the user unchecked them all.
+    Titles come from the registry, so they name what we SEND, not what got cited.
     """
+    if sources is not None and not sources:
+        raise ValueError("소스를 1개 이상 선택해 주세요.")
     reg = corpus.visible_corpus(user_id)
     want = set(sources) if sources else None
-    picked = [e for e in reg if want is None or e["id"] in want] or reg
+    picked = [e for e in reg if want is None or e["id"] in want]
+    if not picked:
+        raise ValueError("선택한 소스를 찾을 수 없어요. 소스 목록을 새로고침해 주세요.")
     paths = {e["path"] for e in picked}
     return [u for u in _uploaded if u.get("path") in paths], [e["title"] for e in picked]
 
@@ -227,8 +233,11 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                 sess.covered_concepts |= set(match_concepts(m["content"], NODES))
     _conv_of[sess.id] = conv_id
 
-    doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
-                                              sources=body.sources, user_id=user_id)
+    try:
+        doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
+                                                  sources=body.sources, user_id=user_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     # Citations name a document by title; the viewer needs its source id to fetch pages.
     title_to_id = {e["title"]: e["id"] for e in corpus.visible_corpus(user_id)}
 
@@ -280,8 +289,11 @@ async def quiz(body: QuizIn, x_device_id: str = Header(None)):
     infos = [NODE_BY_ID[cid] for cid in covered]
     # Same source selection as chat. Was: the ENTIRE corpus — 11 papers blows past the
     # 1M context window on a real key, and rewrote the cache prefix every quiz.
-    quiz_docs, _ = _doc_blocks_for(" ".join(c["label"] for c in infos), citations=False,
-                                   cache_last=True, sources=body.sources, user_id=device)
+    try:
+        quiz_docs, _ = _doc_blocks_for(" ".join(c["label"] for c in infos), citations=False,
+                                       cache_last=True, sources=body.sources, user_id=device)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     async with sess.lock:
         questions = await llm.make_quiz(quiz_docs, infos)
     quiz_id = sess.add_quiz(questions)
@@ -439,7 +451,10 @@ async def suggestions(sources: str = "", x_device_id: str = Header(None)):
     """
     uid = learner(x_device_id)
     ids = [s for s in sources.split(",") if s]
-    _, titles = _pick_sources(ids or None, uid)
+    try:
+        _, titles = _pick_sources(ids or None, uid)
+    except ValueError:
+        return {"suggestions": [], "from_sources": 0}  # 고른 소스가 없으면 추천도 없다
     tset = set(titles)
     hits = [n for n in NODES if tset & set(n.get("sources") or [])] or NODES
     known = set(MASTERY.get_mastery(uid) or {})

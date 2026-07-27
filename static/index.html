@@ -813,6 +813,9 @@ function closeQuiz(){ quizEl.classList.remove('open'); navigate('chat', getConv(
 async function openQuiz(){
   const sid = getSession();
   if(!sid){ alert('조금 더 대화한 뒤에 퀴즈를 볼 수 있어요'); return; }
+  // 채팅과 같은 가드. 전에는 퀴즈만 빠져나가서, 소스를 전부 해제한 직후에도
+  // 10편 전체에서 문제가 생성되고 해제한 논문 제목이 "출처:"에 찍혔다.
+  if(SOURCES.length && !selectedIds().length){ toast('소스를 1개 이상 선택하세요'); return; }
   const btn = document.getElementById('quizbtn'); btn.disabled = true;
   try {
     const r = await fetch('/quiz', {method:'POST', headers: hdr({'Content-Type':'application/json'}), body: JSON.stringify({session_id: sid, sources: selectedIds()})});
