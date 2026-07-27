@@ -201,6 +201,9 @@
   #historybody { flex: 1; overflow-y: auto; padding: 20px; }
   .convcard { display: flex; align-items: center; gap: 10px; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 10px; cursor: pointer; background: var(--canvas-soft); transition: background .15s ease, border-color .15s ease; }
   .convcard:hover { background: rgba(255,255,255,.06); border-color: var(--on-mute); }
+  .convcard.active { border-color: var(--on); background: rgba(255,255,255,.08); }
+  .convcard.active .ctitle::before { content: '● '; color: var(--on); font-size: 9px; vertical-align: middle; }
+  .convtitle { font-size: 13px; font-weight: 600; color: var(--on); max-width: 52ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .convcard .cmain { flex: 1; min-width: 0; }
   .convcard .ctitle { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--on); }
   .convcard .cmeta { font-size: 11px; color: var(--on-mute); margin-top: 3px; text-transform: uppercase; letter-spacing: .8px; }
@@ -241,6 +244,7 @@
       <div class="hd-row">
         <div class="hd-title">
           <h1>리뷰 논문 학습 챗봇</h1>
+          <div id="convtitle" class="convtitle" title="현재 대화">새 대화</div>
           <div id="metrics"></div>
         </div>
         <div class="hd-actions">
@@ -532,6 +536,7 @@ async function send(){
   if(SOURCES.length && !selectedIds().length){ toast('소스를 1개 이상 선택하세요'); return; }
   const empty = log.querySelector('.empty'); if(empty) empty.remove();
   addUser(text); q.value='';
+  if(!getConv()) setConvTitle(text.slice(0, 40));  // 서버 자동 제목과 같은 규칙
   const btn = document.getElementById('send'); btn.disabled = true;
   const bot = newBotBubble();
   try {
@@ -1188,16 +1193,29 @@ function shortTime(s){
   return `${t.getMonth()+1}/${t.getDate()}`;
 }
 
-// Reset to an empty chat: drop stored session + conversation so next /chat starts fresh.
-function newConversation(){
+// 헤더의 현재 대화 제목. 서버의 자동 제목(첫 사용자 메시지 40자)과 같은 규칙을 쓴다.
+const NEW_CONV_TITLE = '새 대화';
+function setConvTitle(t){
+  const title = (t || '').trim() || NEW_CONV_TITLE;
+  localStorage.setItem('rp_convtitle', title);
+  const el = document.getElementById('convtitle');
+  el.textContent = title; el.title = title;
+}
+function getConvTitle(){ return localStorage.getItem('rp_convtitle') || NEW_CONV_TITLE; }
+setConvTitle(getConvTitle());
+
+// 채팅 로그를 빈 새 대화 상태로 되돌린다 (탭은 건드리지 않음).
+function resetChat(){
   localStorage.removeItem('rp_session');
   localStorage.removeItem('rp_conv');
   log.innerHTML = ONBOARD;
   suggest.style.display = '';
   document.getElementById('quizbar').style.display = 'none';
-  showTab('chat');
+  setConvTitle(NEW_CONV_TITLE);
   highlightConcepts([]);
 }
+
+function newConversation(){ resetChat(); showTab('chat'); }
 
 async function openHistory(){
   showTab('history');
@@ -1214,13 +1232,16 @@ async function loadConversations(){
     const convs = d.conversations || [];
     if(!convs.length){ body.innerHTML = '<div class="empty">아직 대화 기록이 없어요.</div>'; return; }
     body.innerHTML = '';
+    const cur = getConv();
     convs.forEach(c => {
-      const card = document.createElement('div'); card.className = 'convcard';
+      const card = document.createElement('div');
+      card.className = 'convcard' + (c.id === cur ? ' active' : '');  // 현재 열린 대화만 활성 표시
+      if(c.id === cur) card.setAttribute('aria-current', 'true');
       card.innerHTML =
         `<div class="cmain"><div class="ctitle">${esc(c.title || '(제목 없음)')}</div>`+
         `<div class="cmeta">${esc(shortTime(c.updated_at))} · ${c.msg_count||0}개 메시지</div></div>`+
         `<div class="cdel" title="삭제">🗑</div>`;
-      card.querySelector('.cmain').onclick = () => resumeConversation(c.id);
+      card.querySelector('.cmain').onclick = () => resumeConversation(c.id, c.title);
       card.querySelector('.cdel').onclick = (e) => { e.stopPropagation(); deleteConversation(c.id); };
       body.appendChild(card);
     });
@@ -1228,13 +1249,14 @@ async function loadConversations(){
 }
 
 // Resume: set conversation_id, CLEAR session_id (server rehydrates context from DB), replay messages.
-async function resumeConversation(id){
+async function resumeConversation(id, title){
   try {
     const r = await fetch('/conversations/' + encodeURIComponent(id), { headers: hdr() });
     if(!r.ok){ toast('대화를 불러오지 못했어요 (' + r.status + ')'); return; }
     const d = await r.json();
     localStorage.setItem('rp_conv', id);
     localStorage.removeItem('rp_session');
+    setConvTitle(title);
     log.innerHTML = '';
     (d.messages || []).forEach(m => {
       if(m.role === 'user') addUser(m.content || '');
@@ -1257,7 +1279,7 @@ async function deleteConversation(id){
   try {
     const r = await fetch('/conversations/' + encodeURIComponent(id), { method:'DELETE', headers: hdr() });
     if(!r.ok){ toast('삭제 실패 (' + r.status + ')'); return; }
-    if(getConv() === id){ localStorage.removeItem('rp_conv'); localStorage.removeItem('rp_session'); }
+    if(getConv() === id) resetChat();  // 열려 있던 대화를 지웠으면 로그도 빈 새 대화로
     loadConversations();
     toast('삭제했어요');
   } catch(e){ toast('삭제 실패'); }
