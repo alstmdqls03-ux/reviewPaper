@@ -58,14 +58,36 @@ def visible_corpus(user_id: str | None = None) -> list[dict]:
     return [e for e in load_corpus() if e.get("owner") in (None, user_id)]
 
 
+def content_hash(path: str) -> str:
+    """sha1 of the file's bytes, or "" if unreadable."""
+    try:
+        return hashlib.sha1(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
 def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
-    """Append an entry (dedupe by path), persist, return it. Offline/pure — no upload."""
+    """Append an entry, persist, return it. Offline/pure — no upload.
+
+    Dedupes by path AND by file content: the same PDF saved under two names is the
+    same paper, and registering it twice doubles its tokens in every request. Only
+    compares against entries this owner can see, so users can't probe each other's files.
+    """
     reg = load_corpus()
     for e in reg:
         if e["path"] == path:
             return e  # already registered; upload happens lazily via ensure_uploaded
+    sha = content_hash(path)
+    if sha:
+        for e in reg:
+            if e.get("owner") not in (None, owner):
+                continue
+            if "sha" not in e:  # backfill lazily; only paid once per entry
+                e["sha"] = content_hash(e["path"])
+            if e["sha"] and e["sha"] == sha:
+                return e  # byte-identical to a paper already in the registry
     entry = {"id": source_id(path), "path": path, "title": title, "owner": owner,
-             "added_at": time.time()}
+             "added_at": time.time(), "sha": sha}
     reg.append(entry)
     _save(reg)
     return entry
@@ -269,11 +291,11 @@ if __name__ == "__main__":
         assert [e["title"] for e in reg] == [t for _, t in papers.PAPERS]
 
         # (b) add_pdf dedupes and persists
-        e1 = add_pdf("papers/zz-new.pdf", "New Paper")
+        e1 = add_pdf("papers/zz-new.pdf", "New Paper")   # nonexistent file -> sha ""
         assert {k: e1[k] for k in ("id", "path", "title", "owner")} == {
             "id": source_id("papers/zz-new.pdf"), "path": "papers/zz-new.pdf",
             "title": "New Paper", "owner": None}
-        assert e1["added_at"] > 0
+        assert e1["added_at"] > 0 and e1["sha"] == ""
         assert len({e["id"] for e in load_corpus()}) == len(load_corpus()), "ids must be unique"
 
         assert len(load_corpus()) == n0 + 1
@@ -307,6 +329,13 @@ if __name__ == "__main__":
         assert len(load_corpus()) == n_before - 1
         assert remove(alice_id, owner="userA") is None, "double delete must be a no-op"
         assert owned_count("userA") == 0
+
+        # (b4) 같은 내용의 PDF를 다른 이름으로 올려도 두 번 등록되지 않는다
+        real = papers.PAPERS[2][0]
+        n_before = len(load_corpus())
+        dup = add_pdf(real, "Same bytes, different name", owner="userC")
+        assert dup["path"] == real, dup             # 기존 엔트리를 그대로 돌려준다
+        assert len(load_corpus()) == n_before, "content dedupe failed"
 
         # (c) bm25 ranks the obviously-relevant toy doc first
         docs = [
