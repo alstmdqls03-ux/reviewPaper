@@ -201,6 +201,19 @@
   .srcact span:hover { color: var(--on); }
   .srcact span.del:hover { color: var(--danger); }
   .srcsort { padding: 8px 10px; font-size: 12px; font-family: var(--sans); color: var(--on); background: var(--canvas-soft); border: 1px solid var(--hairline); border-radius: var(--radius-pill); cursor: pointer; }
+  /* 소스 툴바 한 줄: [전체체크] 개수…… [정렬▾] [＋] */
+  #sources .pane-toolbar { align-items: center; justify-content: flex-start; gap: 6px; padding: 10px 14px; }
+  .srcallbox { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--on); cursor: pointer; margin: 0; }
+  #sources .srccount { margin-right: auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srciconbtn { flex-shrink: 0; padding: 8px; min-width: 36px; min-height: 36px; gap: 0; }
+  .srcsortwrap { position: relative; flex-shrink: 0; }
+  .srcsortmenu { display: none; position: absolute; right: 0; top: calc(100% + 4px); z-index: 12; min-width: 132px;
+                 background: var(--canvas-soft); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px; }
+  .srcsortmenu.open { display: block; }
+  .srcsortmenu button { display: flex; width: 100%; justify-content: flex-start; border: 0; border-radius: var(--radius-sm);
+                        padding: 8px 10px; font-size: 12px; text-transform: none; letter-spacing: normal; font-weight: 500; }
+  .srcsortmenu button[aria-checked="true"]::before { content: '✓'; margin-right: 6px; }
+  .srcsortmenu button[aria-checked="false"]::before { content: ''; margin-right: 15px; }
   .srcitem.pending { opacity: .6; }
   .srcitem.pending .stitle::after { content: ' · 처리 중…'; color: var(--ink-faint); font-size: 11px; }
   .srcerr { border: 1px solid rgba(255,90,90,.45); color: var(--danger); border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 10px; font-size: 13px; }
@@ -282,7 +295,7 @@
   @media (min-width: 1100px) {
     #sources.tabpane { display: flex; flex-direction: column; flex: 0 0 var(--rail);
                        order: -1; border-right: 1px solid var(--border); }  /* 왼쪽 열로 */
-    #sources .pane-toolbar { flex-wrap: wrap; }
+    #sources .pane-toolbar { flex-wrap: nowrap; }  /* 한 줄에 들어가도록 접었다 — 아래 srccount가 줄어든다 */
     #sourcesopen, #srcclose { display: none; }   /* 항상 보이므로 열기/닫기 버튼이 필요 없다 */
     #sources .railhead { display: block; }
   }
@@ -335,18 +348,23 @@
       <!-- 소스 -->
       <div class="tabpane" role="tabpanel" aria-label="소스" data-pane="sources" id="sources">
         <div class="railhead">소스</div>
+        <!-- 300px 레일에 컨트롤 5개는 안 들어간다(실측 3줄 143px). 전체선택/해제는
+             체크박스 하나로 합치고, 정렬은 아이콘 버튼이 여는 메뉴로 접었다. -->
         <div class="pane-toolbar">
+          <input type="checkbox" id="srctoggleall" class="srcallbox" aria-label="전체 선택/해제" title="전체 선택/해제">
           <span id="srccount" class="srccount"></span>
-          <button type="button" class="ghostbtn" id="srcall">전체 선택</button>
-          <button type="button" class="ghostbtn" id="srcnone">전체 해제</button>
-          <select id="srcsort" class="srcsort" aria-label="소스 정렬">
-            <option value="added">추가순</option>
-            <option value="title">제목순</option>
-            <option value="mine">내 업로드 먼저</option>
-          </select>
-          <button type="button" class="ghostbtn" id="srcadd"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>논문 추가</button>
+          <div class="srcsortwrap">
+            <button type="button" class="ghostbtn srciconbtn" id="srcsortbtn" aria-haspopup="true" aria-expanded="false" title="정렬" aria-label="정렬"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13M3 12h9M3 18h5"/><path d="M18 9v10M15 16l3 3 3-3"/></svg></button>
+            <div class="srcsortmenu" id="srcsortmenu" role="menu"></div>
+          </div>
+          <button type="button" class="ghostbtn srciconbtn" id="srcadd" title="논문 추가" aria-label="논문 추가"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
           <button type="button" class="ghostbtn" id="srcclose">대화로</button>
         </div>
+        <select id="srcsort" class="srcsort" aria-label="소스 정렬" hidden>
+          <option value="added">추가순</option>
+          <option value="title">제목순</option>
+          <option value="mine">내 업로드 먼저</option>
+        </select>
         <div id="sourcesbody"></div>
       </div>
       <!-- 학습 -->
@@ -1280,8 +1298,14 @@ function renderSources(){
   const body = document.getElementById('sourcesbody');
   const on = new Set(selectedIds());
   const owned = SOURCES.filter(s => s.mine).length;
-  document.getElementById('srccount').textContent =
-    `${on.size} / ${SOURCES.length}편 선택` + (SRC_MAX ? ` · 내 업로드 ${owned}/${SRC_MAX}` : '');
+  const countEl = document.getElementById('srccount');
+  countEl.textContent = `${on.size}/${SOURCES.length}편` + (SRC_MAX ? ` · 내 ${owned}/${SRC_MAX}` : '');
+  countEl.title = `${SOURCES.length}편 중 ${on.size}편 선택` +
+    (SRC_MAX ? ` · 내 업로드 ${owned}/${SRC_MAX}편` : '');   // 줄인 문구의 원문은 툴팁에
+  // 전체선택/전체해제 버튼 2개를 체크박스 1개로 합쳤다. 일부만 골랐으면 중간 상태.
+  const allbox = document.getElementById('srctoggleall');
+  allbox.checked = SOURCES.length > 0 && on.size === SOURCES.length;
+  allbox.indeterminate = on.size > 0 && on.size < SOURCES.length;
   body.innerHTML = '';
   if(SRC_ERROR) body.insertAdjacentHTML('beforeend', `<div class="srcerr">${esc(SRC_ERROR)}</div>`);
   if(SRC_PENDING){
@@ -1374,9 +1398,39 @@ async function errText(r, fallback){
 document.getElementById('sourcesopen').onclick = () => navigate('sources');
 document.getElementById('srcclose').onclick = () => navigate('chat', getConv() || '');
 document.getElementById('srcadd').onclick = () => { document.getElementById('uploadopen').click(); };
-document.getElementById('srcall').onclick = () => { setSelected(SOURCES.map(s=>s.id)); renderSources(); refreshSuggestions(); };
-document.getElementById('srcnone').onclick = () => { setSelected([]); renderSources(); };
-document.getElementById('srcsort').onchange = renderSources;
+// 체크박스 하나로 전체 선택 <-> 전체 해제. 중간 상태에서 누르면 전체 선택으로 간다.
+document.getElementById('srctoggleall').onchange = e => {
+  setSelected(e.target.checked ? SOURCES.map(s => s.id) : []);
+  renderSources();
+  refreshSuggestions();
+};
+
+// 정렬: select 대신 아이콘 버튼 + 메뉴. 값은 숨겨둔 <select>에 그대로 써서
+// sortedSources()가 바뀌지 않게 한다 (레이아웃만 바꾸고 로직은 그대로).
+const srcSortSel = document.getElementById('srcsort');
+const srcSortMenu = document.getElementById('srcsortmenu');
+const srcSortBtn = document.getElementById('srcsortbtn');
+function renderSortMenu(){
+  srcSortMenu.innerHTML = '';
+  [...srcSortSel.options].forEach(o => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', o.value === srcSortSel.value ? 'true' : 'false');
+    b.textContent = o.textContent;
+    b.onclick = () => { srcSortSel.value = o.value; closeSortMenu(); renderSources(); };
+    srcSortMenu.appendChild(b);
+  });
+}
+function closeSortMenu(){ srcSortMenu.classList.remove('open'); srcSortBtn.setAttribute('aria-expanded', 'false'); }
+srcSortBtn.onclick = e => {
+  e.stopPropagation();
+  const open = !srcSortMenu.classList.contains('open');
+  renderSortMenu();
+  srcSortMenu.classList.toggle('open', open);
+  srcSortBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+};
+document.addEventListener('click', closeSortMenu);
+document.addEventListener('keydown', e => { if(e.key === 'Escape') closeSortMenu(); });
 loadSources();
 
 // ---- Notes ----
