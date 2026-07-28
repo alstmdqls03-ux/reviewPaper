@@ -24,6 +24,9 @@ app.db  ─ 전부 한 파일 (신원 · 대화 · 소스 · 학습 진척)
 │     └─ FK user_id → users(id) ON DELETE CASCADE
 └─ schema_migrations(name PK, applied_at)   1회성 데이터 이관 원장
 
+   sources에 붙은 것: pages · est_tokens(컨텍스트 한도 검사용) ·
+   status('ready'|'processing'|'error') · status_msg(실패 사유)
+
 DB 밖
 ├─ uploads/<owner>/*.pdf   업로드 원본
 ├─ text_cache/*.json       pypdf 추출 텍스트 (뷰어 + BM25 공용)
