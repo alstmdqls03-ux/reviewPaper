@@ -265,6 +265,57 @@ def test_context_budget_blocks_before_the_api_does():
     print(f"context budget ok: {total:,} tokens across {len(reg)} sources")
 
 
+def test_deleted_source_keeps_its_name_for_past_citations():
+    """소스를 지워도 과거 답변의 인용은 '권한이 없어요'가 아니라 툼스톤을 본다.
+
+    예전엔 행까지 지워서, 내가 지운 내 파일에 권한 문구가 떴다. 이제 행은 남고
+    deleted_at만 찍힌다 — 목록·근거에서는 즉시 빠지고, 뷰어는 제목과 삭제 시각을 준다.
+    """
+    import asyncio
+    import app
+    from fastapi import HTTPException
+
+    uid = app.learner("deldev")
+    e = corpus.add_pdf("uploads/del/gone.pdf", "지울 논문", owner=uid)
+    sid = e["id"]
+    try:
+        assert sid in {x["id"] for x in corpus.visible_corpus(uid)}
+        assert corpus.remove(sid, owner=uid), "본인 소스인데 삭제가 안 됐다"
+
+        # 목록·근거·개수에서 즉시 빠진다
+        assert sid not in {x["id"] for x in corpus.visible_corpus(uid)}
+        assert sid not in {x["id"] for x in corpus.load_corpus()}
+        assert "지울 논문" not in [t for _, t in corpus.corpus_papers()]
+        try:
+            app._pick_sources([sid], user_id=uid)
+            raise AssertionError("지운 소스가 답변 근거로 쓰였다")
+        except ValueError:
+            pass
+
+        # 과거 인용은 제목과 삭제 시각을 본다 (404 아님)
+        out = asyncio.run(app.source_page(sid, 1, x_device_id="deldev"))
+        assert out["deleted"] is True and out["title"] == "지울 논문", out
+        assert out["deleted_at"], out
+
+        # 남의 세션에서는 여전히 안 보인다 — 툼스톤이 제목 유출 경로가 되면 안 된다
+        try:
+            asyncio.run(app.source_page(sid, 1, x_device_id="otherdev"))
+            raise AssertionError("남의 삭제된 소스 제목이 새어나갔다")
+        except HTTPException as exc:
+            assert exc.status_code == 404
+
+        # 같은 경로로 다시 올리면 같은 id로 되살아난다 (과거 인용이 계속 열리도록)
+        again = corpus.add_pdf("uploads/del/gone.pdf", "다시 올린 논문", owner=uid)
+        assert again["id"] == sid, again
+        assert again["deleted_at"] is None
+        assert sid in {x["id"] for x in corpus.visible_corpus(uid)}
+        print("tombstone ok")
+    finally:
+        db = corpus.connect()
+        with db:
+            db.execute("DELETE FROM sources WHERE id=?", (sid,))
+
+
 if __name__ == "__main__":
     test_ids_stable_and_unique()
     test_selection_narrows_titles()
@@ -273,4 +324,5 @@ if __name__ == "__main__":
     test_empty_selection_is_not_everything()
     test_processing_sources_are_not_used_as_evidence()
     test_context_budget_blocks_before_the_api_does()
+    test_deleted_source_keeps_its_name_for_past_citations()
     print("all source self-checks passed")

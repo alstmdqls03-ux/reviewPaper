@@ -476,6 +476,12 @@ async def source_page(sid: str, page: int, x_device_id: str = Header(None)):
     uid = learner(x_device_id)
     entry = next((e for e in corpus.visible_corpus(uid) if e["id"] == sid), None)
     if entry is None:
+        # 지운 소스라면 404가 아니라 툼스톤을 돌려준다. 예전엔 내가 지운 내 파일에
+        # "볼 권한이 없어요"가 떴다 — 과거 답변의 인용이 권한 문제처럼 보였다.
+        gone = corpus.tombstone(sid, uid)
+        if gone:
+            return {"id": sid, "title": gone["title"], "deleted": True,
+                    "deleted_at": gone["deleted_at"], "page": page, "total_pages": 0, "text": ""}
         raise HTTPException(404, "그 소스를 볼 권한이 없어요.")
     try:
         pages = corpus.extract_pages(entry["path"])

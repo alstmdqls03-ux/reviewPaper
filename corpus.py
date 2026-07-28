@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS sources(
     -- 'ready' | 'processing' | 'error'. processing인 소스는 답변 근거로 안 쓴다
     -- (아직 Files API에 안 올라갔거나 텍스트 추출 전이다)
     status TEXT NOT NULL DEFAULT 'ready',
-    status_msg TEXT
+    status_msg TEXT,
+    -- 삭제는 행을 지우지 않고 여기에 시각을 찍는다(툼스톤). 파일은 진짜로 지운다.
+    -- 행을 지우면 그 논문을 인용한 과거 답변이 "권한이 없어요"가 되어버린다 —
+    -- 내가 지운 내 파일에 권한 문구가 뜨는 동작이었다.
+    deleted_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner);
 CREATE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha);
@@ -86,7 +90,8 @@ def connect(db_path: str | None = None):
     # pages/est_tokens는 sources가 나온 뒤에 붙었다. 기존 DB는 제자리 ALTER로.
     cols = {r["name"] for r in db.execute("PRAGMA table_info(sources)")}
     for col, typ in (("pages", "INTEGER"), ("est_tokens", "INTEGER"),
-                     ("status", "TEXT NOT NULL DEFAULT 'ready'"), ("status_msg", "TEXT")):
+                     ("status", "TEXT NOT NULL DEFAULT 'ready'"), ("status_msg", "TEXT"),
+                     ("deleted_at", "REAL")):
         if col not in cols:
             db.execute(f"ALTER TABLE sources ADD COLUMN {col} {typ}")
     db.commit()
@@ -104,6 +109,7 @@ def _row(r) -> dict:
     d["est_tokens"] = r["est_tokens"] if "est_tokens" in keys else None
     d["status"] = (r["status"] if "status" in keys else None) or "ready"
     d["status_msg"] = r["status_msg"] if "status_msg" in keys else None
+    d["deleted_at"] = r["deleted_at"] if "deleted_at" in keys else None
     return d
 
 
@@ -184,14 +190,15 @@ def load_corpus() -> list[dict]:
     Order is insertion order (rowid) — the same order corpus.json had, and the
     order the prompt's document blocks are built in. Do not change it casually.
     """
-    return [_row(r) for r in connect().execute("SELECT * FROM sources ORDER BY rowid")]
+    return [_row(r) for r in connect().execute("SELECT * FROM sources WHERE deleted_at IS NULL ORDER BY rowid")]
 
 
 def visible_corpus(user_id: str | None = None) -> list[dict]:
     """What one user may see: the shared seed papers + their own uploads.
     user_id=None means "no user context" -> shared papers only."""
     return [_row(r) for r in connect().execute(
-        "SELECT * FROM sources WHERE owner IS NULL OR owner = ? ORDER BY rowid", (user_id,))]
+        "SELECT * FROM sources WHERE deleted_at IS NULL AND (owner IS NULL OR owner = ?) "
+        "ORDER BY rowid", (user_id,))]
 
 
 def content_hash(path: str) -> str:
@@ -222,12 +229,24 @@ def add_pdf(path: str, title: str, owner: str | None = None,
     db = connect()
     sha = content_hash(path)
     hit = db.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()
-    if hit:
+    if hit and hit["deleted_at"] is None:
         return _row(hit)                   # 이미 등록됨; 업로드는 ensure_uploaded가 지연 처리
+    if hit:
+        # 툼스톤이 된 경로에 같은 파일을 다시 올렸다. 행을 되살린다 — 새 id를 주면
+        # 그 논문을 인용한 과거 답변은 계속 삭제된 id를 가리켜 영영 안 열린다.
+        pages, est = (0, 0) if status == "processing" else estimate_tokens(path)
+        with db:
+            db.execute("""UPDATE sources SET deleted_at=NULL, title=?, owner=?, sha=?,
+                                 added_at=?, pages=?, est_tokens=?, status=?, status_msg=NULL
+                           WHERE path=?""",
+                       (title, owner, sha, time.time(), pages, est, status, path))
+        _reset_index()
+        return _row(db.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone())
     if sha:
         # 내가 볼 수 있는 범위에서만 비교한다 — 해시로 남의 파일 존재를 떠볼 수 없게
         dup = db.execute(
-            "SELECT * FROM sources WHERE sha = ? AND (owner IS NULL OR owner = ?) LIMIT 1",
+            "SELECT * FROM sources WHERE sha = ? AND deleted_at IS NULL "
+            "AND (owner IS NULL OR owner = ?) LIMIT 1",
             (sha, owner)).fetchone()
         if dup:
             return _row(dup)               # 바이트까지 같은 논문이 이미 있다
@@ -254,16 +273,21 @@ def remove(sid: str, owner: str) -> dict | None:
     Shared seed papers (owner=None) are never deletable — one user must not be able
     to empty the corpus for everyone. The PDF on disk goes too; its cached page text
     is dropped so a re-upload of the same name re-extracts rather than serving stale text.
+
+    행은 남기고 `deleted_at`만 찍는다(툼스톤). 목록·근거·검색에서는 즉시 빠지지만,
+    그 논문을 인용한 과거 답변의 각주는 제목과 삭제 시각을 계속 보여줄 수 있다.
+    행까지 지우면 내가 지운 내 파일에 "볼 권한이 없어요"가 떴다.
     """
     if not owner:
         return None
     db = connect()
     with db:
-        hit = db.execute("SELECT * FROM sources WHERE id = ? AND owner = ?",
-                         (sid, owner)).fetchone()
+        hit = db.execute(
+            "SELECT * FROM sources WHERE id = ? AND owner = ? AND deleted_at IS NULL",
+            (sid, owner)).fetchone()
         if hit is None:
             return None
-        db.execute("DELETE FROM sources WHERE id = ?", (sid,))
+        db.execute("UPDATE sources SET deleted_at = ? WHERE id = ?", (time.time(), sid))
     hit = _row(hit)
     for p in (Path(hit["path"]), _TEXT_CACHE_DIR / (Path(hit["path"]).stem + ".json")):
         p.unlink(missing_ok=True)
@@ -279,8 +303,9 @@ def rename(sid: str, title: str, owner: str) -> dict | None:
         return None
     db = connect()
     with db:
-        cur = db.execute("UPDATE sources SET title = ? WHERE id = ? AND owner = ?",
-                         (title[:200], sid, owner))
+        cur = db.execute(
+            "UPDATE sources SET title = ? WHERE id = ? AND owner = ? AND deleted_at IS NULL",
+            (title[:200], sid, owner))
         if cur.rowcount == 0:
             return None
         hit = db.execute("SELECT * FROM sources WHERE id = ?", (sid,)).fetchone()
@@ -295,9 +320,22 @@ def set_status(sid: str, status: str, msg: str | None = None) -> None:
         db.execute("UPDATE sources SET status=?, status_msg=? WHERE id=?", (status, msg, sid))
 
 
+def tombstone(sid: str, user_id: str | None = None) -> dict | None:
+    """삭제된 소스의 남은 정보 (제목·삭제 시각), 볼 수 있는 사람에게만.
+
+    과거 답변의 인용을 눌렀을 때 "권한이 없어요" 대신 "이 소스는 언제 삭제됐다"를
+    보여주기 위한 것. 살아 있는 소스는 여기서 안 나온다 (그건 visible_corpus 몫).
+    """
+    r = connect().execute(
+        """SELECT * FROM sources
+            WHERE id = ? AND deleted_at IS NOT NULL AND (owner IS NULL OR owner = ?)""",
+        (sid, user_id)).fetchone()
+    return _row(r) if r else None
+
+
 def owned_count(owner: str) -> int:
     return connect().execute(
-        "SELECT COUNT(*) FROM sources WHERE owner = ?", (owner,)).fetchone()[0]
+        "SELECT COUNT(*) FROM sources WHERE owner = ? AND deleted_at IS NULL", (owner,)).fetchone()[0]
 
 
 def corpus_papers() -> list[tuple]:
@@ -305,14 +343,15 @@ def corpus_papers() -> list[tuple]:
     Every path, all owners — file_ids are per-FILE, so one upload serves everyone
     who can see it; visibility is enforced at selection time, not here."""
     return [(r["path"], r["title"]) for r in connect().execute(
-        "SELECT path, title FROM sources ORDER BY rowid")]
+        "SELECT path, title FROM sources WHERE deleted_at IS NULL ORDER BY rowid")]
 
 
 def shared_papers() -> list[tuple]:
     """Only the shared (owner=None) papers — what the global concept graph is built from,
     so one user's upload can't rewrite everyone else's graph."""
     return [(r["path"], r["title"]) for r in connect().execute(
-        "SELECT path, title FROM sources WHERE owner IS NULL ORDER BY rowid")]
+        "SELECT path, title FROM sources WHERE owner IS NULL AND deleted_at IS NULL "
+        "ORDER BY rowid")]
 
 
 # ------------------------------------------------------------ text extract ---
