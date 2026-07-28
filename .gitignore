@@ -24,3 +24,10 @@ papers/*.pdf
 # 무력화된다. 그래서 `/*`로 내용만 제외한다.
 docs/contract/*
 !docs/contract/README.md
+
+# 사업 문서(제안서·현황계획·설명방안·시연 자료)는 저장소에 넣지 않는다.
+# 사업·발표 문서는 로컬에만 둔다.
+docs/제안서*
+docs/현황계획*
+docs/설명방안*
+docs/시연-cheatsheet*
