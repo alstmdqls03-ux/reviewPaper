@@ -23,7 +23,10 @@ def test_ids_stable_and_unique():
 def test_selection_narrows_titles():
     import app
 
-    reg = corpus.load_corpus()
+    # 기준선은 load_corpus()(전체 행)가 아니라 visible_corpus(None)(공용 시드)다.
+    # 예전엔 둘이 같았는데, 그건 업로드 1편이 owner=NULL이라 공용으로 잘못 분류돼
+    # 있었기 때문이다 — 테스트가 그 버그를 사실로 굳히고 있었다.
+    reg = corpus.visible_corpus(None)
     # no selection -> the whole registry is reported as used
     _, all_titles = app._pick_sources(None)
     assert all_titles == [e["title"] for e in reg], all_titles
@@ -96,7 +99,7 @@ def test_source_page_and_suggestions():
     import app
     from fastapi import HTTPException
 
-    reg = corpus.load_corpus()
+    reg = corpus.visible_corpus(None)
     sid = reg[2]["id"]  # 가장 작은 시드 논문
     page = asyncio.run(app.source_page(sid, 1, x_device_id="testdev"))
     assert page["page"] == 1 and page["total_pages"] > 1, page
@@ -154,7 +157,7 @@ def test_empty_selection_is_not_everything():
     import app
     from fastapi import HTTPException
 
-    reg = corpus.load_corpus()
+    reg = corpus.visible_corpus(None)
     _, all_titles = app._pick_sources(None)          # 미선택은 지금도 전체
     assert len(all_titles) == len(reg)
 
@@ -237,7 +240,7 @@ def test_context_budget_blocks_before_the_api_does():
     import app
     from config import settings
 
-    reg = corpus.ensure_estimates(corpus.load_corpus())
+    reg = corpus.ensure_estimates(corpus.visible_corpus(None))
     total = sum(e["est_tokens"] or 0 for e in reg)
     assert total > 0, "토큰 추정이 하나도 안 채워졌다"
 
