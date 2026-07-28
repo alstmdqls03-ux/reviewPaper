@@ -22,7 +22,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import (BackgroundTasks, FastAPI, File, Form, Header, HTTPException,
+                     Request, UploadFile)
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -136,10 +137,17 @@ def _pick_sources(sources: list[str] | None,
     """
     if sources is not None and not sources:
         raise ValueError("소스를 1개 이상 선택해 주세요.")
-    reg = corpus.visible_corpus(user_id)
+    # 아직 처리 중인 소스는 근거가 될 수 없다 (Files API에 안 올라갔고 추출도 전이다).
+    # 조용히 빼면 "고른 소스가 답변에 없다"가 되므로, 그것만 골랐으면 이유를 말한다.
+    reg = [e for e in corpus.visible_corpus(user_id) if e.get("status", "ready") == "ready"]
     want = set(sources) if sources else None
     picked = [e for e in reg if want is None or e["id"] in want]
     if not picked:
+        pending = [e for e in corpus.visible_corpus(user_id)
+                   if e.get("status") == "processing" and (want is None or e["id"] in want)]
+        if pending:
+            raise ValueError(f"고른 소스가 아직 처리 중이에요 ({len(pending)}편). "
+                             "목록에서 처리가 끝나면 다시 시도해 주세요.")
         raise ValueError("선택한 소스를 찾을 수 없어요. 소스 목록을 새로고침해 주세요.")
     # 고른 소스가 모델 창에 안 들어가면 여기서 막는다. 안 막으면 실키에서 API가
     # 400을 던지고, 사용자는 무엇을 줄여야 하는지 모르는 채로 실패를 본다.
@@ -448,7 +456,8 @@ async def get_corpus(x_device_id: str = Header(None)):
     vis = corpus.ensure_estimates(corpus.visible_corpus(uid))
     return {"sources": [{"id": e["id"], "title": e["title"], "owner": e.get("owner"),
                          "mine": e.get("owner") == uid, "added_at": e.get("added_at"),
-                         "pages": e.get("pages"), "est_tokens": e.get("est_tokens")}
+                         "pages": e.get("pages"), "est_tokens": e.get("est_tokens"),
+                         "status": e.get("status", "ready"), "status_msg": e.get("status_msg")}
                         for e in vis],
             "owned": corpus.owned_count(uid), "max_sources": settings.MAX_SOURCES,
             "max_context_tokens": settings.MAX_CONTEXT_TOKENS}
@@ -524,8 +533,8 @@ async def rename_source(sid: str, body: NameIn, x_device_id: str = Header(None))
 
 
 @app.post("/upload")
-async def upload(file: UploadFile = File(...), title: str = Form(...),
-                 x_device_id: str = Header(None)):
+async def upload(background: BackgroundTasks, file: UploadFile = File(...),
+                 title: str = Form(...), x_device_id: str = Header(None)):
     contents = await file.read()
     if not contents:
         raise HTTPException(400, "빈 파일이에요. PDF를 다시 선택해 주세요.")
@@ -548,18 +557,41 @@ async def upload(file: UploadFile = File(...), title: str = Form(...),
     # Re-uploading the same filename replaces the bytes, so drop the cached page text
     # or BM25/citations would keep serving the old document's pages.
     Path("text_cache", dest.stem + ".json").unlink(missing_ok=True)
-    corpus.add_pdf(str(dest), title, owner=owner)
+    entry = corpus.add_pdf(str(dest), title, owner=owner, status="processing")
     corpus._reset_index()
-    regenerated = "skipped (mock or no key)"
-    if not llm.MOCK:
-        global _uploaded
-        _uploaded = _upload_corpus(papers.client())
-        # ponytail: the concept graph is global, so it is rebuilt from the SHARED papers
-        # only — one user's upload must not rewrite everyone else's map.
-        regenerated = corpus.regenerate_graph()
+    # 느린 일(텍스트 추출 · Files API 업로드 · 개념 그래프 재생성)은 응답을 보낸 뒤
+    # 돈다. 전에는 요청 안에서 동기로 처리해서, 실키에서 POST /upload가 그래프
+    # 재생성이 끝날 때까지 수십 초 응답하지 않았다 (회고 N3).
+    background.add_task(_finish_upload, entry["id"], entry["path"])
     return {"corpus_size": len(corpus.visible_corpus(owner)), "title": title,
-            "owned": corpus.owned_count(owner), "max_sources": settings.MAX_SOURCES,
-            "regenerated": regenerated}
+            "id": entry["id"], "status": entry.get("status", "processing"),
+            "owned": corpus.owned_count(owner), "max_sources": settings.MAX_SOURCES}
+
+
+def _finish_upload(sid: str, path: str) -> None:
+    """업로드 후처리. 동기 함수라 Starlette가 스레드풀에서 돌린다 (이벤트 루프를 막지 않음).
+
+    끝나면 status가 ready 또는 error가 되고, 목록을 폴링하던 화면이 그걸 보고 바뀐다.
+    """
+    global _uploaded
+    try:
+        pages, est = corpus.estimate_tokens(path)     # pypdf 추출 (여기가 몇 초)
+        db = corpus.connect()
+        with db:
+            db.execute("UPDATE sources SET pages=?, est_tokens=? WHERE id=?", (pages, est, sid))
+        if not pages:
+            corpus.set_status(sid, "error", "텍스트를 추출하지 못했어요 (이미지만 있는 PDF일 수 있어요)")
+            return
+        if not llm.MOCK:
+            _uploaded = _upload_corpus(papers.client())   # Files API 업로드
+            # ponytail: the concept graph is global, so it is rebuilt from the SHARED
+            # papers only — one user's upload must not rewrite everyone else's map.
+            # corpus.graph_data()가 파일 변경을 감지하므로 재시작 없이 반영된다.
+            corpus.regenerate_graph()
+        corpus.set_status(sid, "ready")
+    except Exception as e:  # noqa: BLE001 — 실패해도 행은 남기고 사유를 화면에 보여준다
+        obs.log_line(event="upload_process_failed", source_id=sid, error=f"{type(e).__name__}: {e}")
+        corpus.set_status(sid, "error", f"처리 실패: {type(e).__name__}")
 
 
 # ---- ops: metrics, analytics, health ------------------------------------------

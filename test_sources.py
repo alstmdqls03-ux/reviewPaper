@@ -169,6 +169,49 @@ def test_empty_selection_is_not_everything():
     print("empty-selection guard ok")
 
 
+def test_processing_sources_are_not_used_as_evidence():
+    """업로드 직후 아직 처리 중인 소스는 답변 근거에 안 들어간다.
+
+    Files API에 안 올라갔고 텍스트 추출도 전이라 근거가 될 수 없다. 조용히 빼면
+    "고른 소스가 답변에 없다"가 되므로, 그것만 골랐을 때는 이유를 말해야 한다.
+    """
+    import app
+
+    added = None
+    try:
+        e = corpus.add_pdf("uploads/proc/pending.pdf", "처리 중인 논문",
+                           owner="procuser", status="processing")
+        added = e["id"]
+        assert e["status"] == "processing", e
+
+        # 전체 선택(None)에서도 빠진다
+        _, titles = app._pick_sources(None, user_id="procuser")
+        assert "처리 중인 논문" not in titles, titles
+
+        # 그것만 고르면 400이 아니라 "처리 중"이라고 말한다
+        try:
+            app._pick_sources([added], user_id="procuser")
+            raise AssertionError("처리 중인 소스가 근거로 쓰였다")
+        except ValueError as msg:
+            assert "처리 중" in str(msg), msg
+
+        # ready가 되면 즉시 쓰인다
+        corpus.set_status(added, "ready")
+        _, after = app._pick_sources([added], user_id="procuser")
+        assert after == ["처리 중인 논문"], after
+
+        # error 상태도 근거에서 빠진다
+        corpus.set_status(added, "error", "추출 실패")
+        _, titles2 = app._pick_sources(None, user_id="procuser")
+        assert "처리 중인 논문" not in titles2, titles2
+        print("processing/error 소스 제외 ok")
+    finally:
+        if added:
+            db = corpus.connect()
+            with db:
+                db.execute("DELETE FROM sources WHERE id=?", (added,))
+
+
 def test_context_budget_blocks_before_the_api_does():
     """고른 소스가 모델 창을 넘으면 400으로 먼저 막는다.
 
@@ -212,5 +255,6 @@ if __name__ == "__main__":
     test_uploads_are_private_to_their_owner()
     test_source_page_and_suggestions()
     test_empty_selection_is_not_everything()
+    test_processing_sources_are_not_used_as_evidence()
     test_context_budget_blocks_before_the_api_does()
     print("all source self-checks passed")

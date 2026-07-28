@@ -46,7 +46,11 @@ CREATE TABLE IF NOT EXISTS sources(
     sha TEXT,                    -- 내용 해시: 이름만 바꾼 같은 PDF를 잡는다
     added_at REAL,
     pages INTEGER,               -- 쪽 수 (추출 시점 기준)
-    est_tokens INTEGER           -- 이 논문을 프롬프트에 넣을 때의 대략 토큰 수
+    est_tokens INTEGER,          -- 이 논문을 프롬프트에 넣을 때의 대략 토큰 수
+    -- 'ready' | 'processing' | 'error'. processing인 소스는 답변 근거로 안 쓴다
+    -- (아직 Files API에 안 올라갔거나 텍스트 추출 전이다)
+    status TEXT NOT NULL DEFAULT 'ready',
+    status_msg TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner);
 CREATE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha);
@@ -81,7 +85,8 @@ def connect(db_path: str | None = None):
     db.executescript(SOURCES_DDL)
     # pages/est_tokens는 sources가 나온 뒤에 붙었다. 기존 DB는 제자리 ALTER로.
     cols = {r["name"] for r in db.execute("PRAGMA table_info(sources)")}
-    for col, typ in (("pages", "INTEGER"), ("est_tokens", "INTEGER")):
+    for col, typ in (("pages", "INTEGER"), ("est_tokens", "INTEGER"),
+                     ("status", "TEXT NOT NULL DEFAULT 'ready'"), ("status_msg", "TEXT")):
         if col not in cols:
             db.execute(f"ALTER TABLE sources ADD COLUMN {col} {typ}")
     db.commit()
@@ -97,6 +102,8 @@ def _row(r) -> dict:
     keys = r.keys()
     d["pages"] = r["pages"] if "pages" in keys else None
     d["est_tokens"] = r["est_tokens"] if "est_tokens" in keys else None
+    d["status"] = (r["status"] if "status" in keys else None) or "ready"
+    d["status_msg"] = r["status_msg"] if "status_msg" in keys else None
     return d
 
 
@@ -195,7 +202,8 @@ def content_hash(path: str) -> str:
         return ""
 
 
-def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
+def add_pdf(path: str, title: str, owner: str | None = None,
+            status: str = "ready") -> dict:
     """Register an entry and return it (or the existing one). Offline/pure — no upload.
 
     Dedupes by path AND by file content: the same PDF saved under two names is the
@@ -223,13 +231,17 @@ def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
             (sha, owner)).fetchone()
         if dup:
             return _row(dup)               # 바이트까지 같은 논문이 이미 있다
-    pages, est = estimate_tokens(path)     # 등록 시점에 한 번만 (한도 검사가 SQL 합계로 끝나게)
+    # status='processing'이면 추출은 백그라운드가 한다 — 업로드 요청을 붙잡지 않는다
+    pages, est = (0, 0) if status == "processing" else estimate_tokens(path)
     entry = {"id": source_id(path), "path": path, "title": title, "owner": owner,
-             "added_at": time.time(), "sha": sha, "pages": pages, "est_tokens": est}
+             "added_at": time.time(), "sha": sha, "pages": pages, "est_tokens": est,
+             "status": status, "status_msg": None}
     with db:                               # COMMIT / 예외 시 ROLLBACK
         db.execute(
-            """INSERT INTO sources(id,path,title,owner,sha,added_at,pages,est_tokens)
-               VALUES(:id,:path,:title,:owner,:sha,:added_at,:pages,:est_tokens)
+            """INSERT INTO sources(id,path,title,owner,sha,added_at,pages,est_tokens,
+                                   status,status_msg)
+               VALUES(:id,:path,:title,:owner,:sha,:added_at,:pages,:est_tokens,
+                      :status,:status_msg)
                ON CONFLICT(path) DO NOTHING""", entry)
     # 경합에서 졌으면 먼저 들어간 행이 정답이다 (내 dict가 아니라 DB를 믿는다)
     row = db.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()
@@ -274,6 +286,13 @@ def rename(sid: str, title: str, owner: str) -> dict | None:
         hit = db.execute("SELECT * FROM sources WHERE id = ?", (sid,)).fetchone()
     _reset_index()
     return _row(hit)
+
+
+def set_status(sid: str, status: str, msg: str | None = None) -> None:
+    """소스의 처리 상태를 바꾼다. 'ready'가 되기 전에는 답변 근거로 쓰이지 않는다."""
+    db = connect()
+    with db:
+        db.execute("UPDATE sources SET status=?, status_msg=? WHERE id=?", (status, msg, sid))
 
 
 def owned_count(owner: str) -> int:

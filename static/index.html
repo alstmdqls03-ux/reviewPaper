@@ -219,7 +219,13 @@
   .srcsortmenu button[aria-checked="true"]::before { content: '✓'; margin-right: 6px; }
   .srcsortmenu button[aria-checked="false"]::before { content: ''; margin-right: 15px; }
   .srcitem.pending { opacity: .6; }
-  .srcitem.pending .stitle::after { content: ' · 처리 중…'; color: var(--ink-faint); font-size: 11px; }
+  .srcitem.failed { border-color: rgba(255,90,90,.45); }
+  .serr { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: var(--danger); border: 1px solid rgba(255,90,90,.45); border-radius: var(--radius-pill); padding: 3px 8px; }
+  /* 제목은 nowrap+ellipsis라 ::after로 붙이면 잘려서 안 보인다 — 독립 배지로 둔다 */
+  .sproc { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .7px;
+           color: var(--on); border: 1px solid var(--border); border-radius: var(--radius-pill);
+           padding: 3px 8px; animation: procPulse 1.4s ease-in-out infinite; }
+  @keyframes procPulse { 50% { opacity: .45; } }
   .srcerr { border: 1px solid rgba(255,90,90,.45); color: var(--danger); border-radius: var(--radius-md); padding: 10px 14px; margin-bottom: 10px; font-size: 13px; }
   .srcrename { flex: 1; min-width: 0; padding: 6px 10px; font-size: 14px; font-family: var(--sans); color: var(--on); background: var(--canvas); border: 1px solid var(--on); border-radius: var(--radius-sm); }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: center; justify-content: center; z-index: 20; }
@@ -1367,7 +1373,17 @@ async function loadSources(){
     }
     renderSources();
     refreshSuggestions();
+    schedulePoll();
   } catch(e){ body.innerHTML = '<div class="empty">소스를 불러오지 못했어요.</div>'; }
+}
+
+// 처리 중인 소스가 하나라도 있으면 2초 뒤 다시 읽는다. 끝나면 스스로 멈춘다 —
+// 업로드가 백그라운드로 도는 동안 화면이 알아서 "처리 중…" -> 체크 가능으로 바뀐다.
+let srcPollT = null;
+function schedulePoll(){
+  clearTimeout(srcPollT);
+  if(!SOURCES.some(s => (s.status || 'ready') === 'processing')) return;
+  srcPollT = setTimeout(loadSources, 2000);
 }
 
 let SRC_PENDING = null;   // {title} — 업로드 처리 중인 가짜 행
@@ -1415,15 +1431,22 @@ function renderSources(){
     return;
   }
   sortedSources().forEach(s => {
+    const st = s.status || 'ready';
     const row = document.createElement('div');
-    row.className = 'srcitem' + (on.has(s.id) ? '' : ' off'); row.dataset.id = s.id;
+    row.className = 'srcitem' + (on.has(s.id) ? '' : ' off') +
+                    (st === 'processing' ? ' pending' : '') + (st === 'error' ? ' failed' : '');
+    row.dataset.id = s.id;
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = on.has(s.id);
+    // 처리가 끝나야 질의 대상이 된다 — 끝나기 전에는 체크 자체가 안 된다
+    cb.type = 'checkbox'; cb.checked = on.has(s.id) && st === 'ready';
+    cb.disabled = st !== 'ready';
     cb.setAttribute('aria-label', s.title);
     cb.onchange = onSourceToggle;
     row.appendChild(cb);
     row.insertAdjacentHTML('beforeend',
       `<div class="stitle" title="${esc(s.title)}${s.pages ? ` — ${s.pages}쪽, 약 ${(s.est_tokens||0).toLocaleString()} 토큰` : ''}">${esc(s.title)}</div>` +
+      (st === 'processing' ? `<span class="sproc">처리 중</span>` : '') +
+      (st === 'error' ? `<span class="serr" title="${esc(s.status_msg || '')}">실패</span>` : '') +
       (s.est_tokens ? `<span class="stok">${Math.round(s.est_tokens/1000)}k</span>` : '') +
       `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>` +
       // 공용 논문은 남들도 보는 것이라 이름 변경·삭제 버튼 자체를 주지 않는다
@@ -1619,8 +1642,10 @@ async function doUpload(){
       st.textContent = msg; SRC_ERROR = msg; return;
     }
     const d = await r.json();
-    st.textContent = `논문 추가됨 · 코퍼스 ${d.corpus_size}편 · 내 업로드 ${d.owned}/${d.max_sources}`;
-    toast(`논문 추가됨 · 코퍼스 ${d.corpus_size}편 · 내 업로드 ${d.owned}/${d.max_sources}`);
+    // 서버는 파일만 받고 바로 답한다. 추출·업로드·그래프 재생성은 백그라운드라,
+    // 목록의 그 행이 "처리 중…"으로 떴다가 끝나면 체크 가능해진다.
+    st.textContent = `추가됨 · 처리 중… · 내 업로드 ${d.owned}/${d.max_sources}`;
+    toast(`"${d.title}" 추가됨 — 처리가 끝나면 목록에서 선택할 수 있어요`);
     document.getElementById('upfile').value=''; document.getElementById('uptitle').value='';
   } catch(e){ st.textContent='업로드 실패 (네트워크)'; SRC_ERROR='업로드 실패 (네트워크)'; }
   finally {
