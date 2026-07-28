@@ -202,7 +202,8 @@ class NoteIn(BaseModel):
     text: str
     source: str = ""
     concept_id: str = ""
-    conversation_id: str | None = None  # 어느 대화에서 저장했는지
+    conversation_id: str | None = None      # 어느 대화에서 저장했는지
+    citations: list[dict] | None = None     # 답변에 붙어 있던 각주 (offset·쪽·구절 포함)
 
 
 class NameIn(BaseModel):
@@ -376,8 +377,10 @@ async def mark_mastery(body: MarkIn, x_device_id: str = Header(None)):
 
 @app.post("/notes")
 async def add_note(body: NoteIn, x_device_id: str = Header(None)):
+    meta = {"citations": body.citations} if body.citations else None
     return {"note_id": MASTERY.add_note(learner(x_device_id), body.text, body.source,
-                                        body.concept_id, conv_id=body.conversation_id)}
+                                        body.concept_id, conv_id=body.conversation_id,
+                                        meta=meta)}
 
 
 @app.get("/notes")

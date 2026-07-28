@@ -191,6 +191,11 @@
   .notecard { border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; background: var(--canvas-soft); }
   .notecard .ntext { font-size: 15px; line-height: 1.6; white-space: pre-wrap; color: var(--on-mute); }
   .notecard .nmeta { font-size: 11px; color: var(--on-mute); margin-top: 8px; text-transform: uppercase; letter-spacing: .8px; }
+  .ncites { margin-top: 10px; border-top: 1px solid var(--hairline); padding-top: 8px; }
+  .ncite { display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+           font-size: 11px; color: var(--on-mute); padding: 4px 0; cursor: pointer; }
+  .ncite:hover { color: var(--on); }
+  .notecard .cite { cursor: pointer; }
   .nconv { cursor: pointer; color: var(--on); border-bottom: 1px solid var(--hairline); text-transform: none; letter-spacing: normal; }
   .nconv:hover { border-bottom-color: var(--on); }
   /* --- 소스 패널 --- */
@@ -699,7 +704,10 @@ function newBotBubble(){
   let plain = '', firstCite = null, concepts = [];
   const cites = {};   // n -> citation payload (뷰어/미리보기가 참조)
   const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-  noteBtn.onclick = () => saveNote(plain, firstCite, concepts[0] || null, noteBtn);
+  // 인용 배열 전체를 넘긴다. 예전엔 firstCite(첫 인용의 '제목 문자열' 하나)만
+  // 보내서, 인용 5개짜리 답변을 저장하면 노트에 논문 제목 1개만 남았다.
+  noteBtn.onclick = () => saveNote(plain, firstCite, concepts[0] || null, noteBtn,
+                                   Object.keys(cites).sort((a,b)=>a-b).map(k => cites[k]));
   // C-b: click a source row to expand its cited passage; click an inline [n] to jump+expand.
   srcBox.onclick = e => {
     const open = e.target.closest('.srcopen');
@@ -1577,13 +1585,14 @@ document.addEventListener('keydown', e => { if(e.key === 'Escape') closeSortMenu
 loadSources();
 
 // ---- Notes ----
-async function saveNote(text, source, concept_id, btn){
+async function saveNote(text, source, concept_id, btn, citations){
   if(!text || !text.trim()) return;
   try {
     const r = await fetch('/notes', {
       method:'POST', headers: hdr({'Content-Type':'application/json'}),
       body: JSON.stringify({text, source: source||'', concept_id: concept_id||'',
-                            conversation_id: getConv() || null})
+                            conversation_id: getConv() || null,
+                            citations: (citations && citations.length) ? citations : null})
     });
     if(!r.ok){ toast('노트 저장 실패 (' + r.status + ')'); return; }
     if(btn){ btn.textContent='✓ 저장됨'; btn.disabled=true; }
@@ -1609,15 +1618,29 @@ async function openNotes(){
     body.innerHTML = '';
     notes.forEach(nt => {
       const card = document.createElement('div'); card.className='notecard';
+      const cites = (nt.meta && nt.meta.citations) || [];
       const meta = [nt.source, shortTime(nt.created_at)].filter(Boolean).map(esc).join(' · ');
       // 어느 대화에서 나온 노트인지 — 클릭하면 그 대화로 돌아간다.
       // 이게 없으면 여러 대화의 노트가 한 목록에 뒤섞여 출처를 알 수 없다.
       const from = nt.conv_id && nt.conv_title
         ? `<span class="nconv" data-conv="${esc(nt.conv_id)}">💬 ${esc(nt.conv_title)}</span>` : '';
-      card.innerHTML = `<div class="ntext">${esc(nt.text||'')}</div>` +
+      // 각주를 원래 자리에 되돌린다 (대화 재개와 같은 offset 규칙).
+      // 저장할 때 인용 배열을 통째로 갖고 왔으므로 노트도 근거를 그대로 유지한다.
+      card.innerHTML = `<div class="ntext">${citedHtml(nt.text || '', cites)}</div>` +
+        (cites.length ? `<div class="ncites">${cites.map((c, i) =>
+            `<div class="ncite" data-i="${i}">[${i+1}] ${esc(`${c.title||''} ${c.start_page?`p.${c.start_page}`:''}`.trim())}`
+            + (c.source_id ? `<span class="srcopen">원문 쪽 열기</span>` : '') + `</div>`).join('')}</div>` : '') +
         (meta || from ? `<div class="nmeta">${meta}${meta && from ? ' · ' : ''}${from}</div>` : '');
       const link = card.querySelector('.nconv');
       if(link) link.onclick = () => resumeConversation(link.dataset.conv);
+      // 각주와 출처 행 둘 다 원문 뷰어로 간다 — 답변에서와 똑같이 동작한다
+      card.onclick = e => {
+        const hit = e.target.closest('.cite, .ncite');
+        if(!hit) return;
+        const c = cites[hit.classList.contains('cite') ? (+hit.dataset.n - 1) : +hit.dataset.i];
+        if(c && c.source_id) openViewer(c.source_id, c.start_page || 1, c.cited_text || '');
+        else toast('이 인용은 원문 위치를 알 수 없어요');
+      };
       body.appendChild(card);
     });
   } catch(e){ body.innerHTML = '<div class="empty">노트를 불러오지 못했어요.</div>'; }
@@ -1799,6 +1822,23 @@ function newConversation(){ resetChat(); navigate('chat'); }
 async function openHistory(){
   showTab('history');
   loadConversations();
+}
+
+// 본문 + 인용 배열 -> 각주가 원래 자리에 박힌 HTML.
+// offset이 있으면 그 글자 뒤에, 없으면(=v5 이전 저장분) 끝에 모아 붙인다.
+// 답변 재생·노트 카드가 같은 규칙을 쓰도록 한 곳에 둔다.
+function citedHtml(text, cites){
+  const list = (cites || []).map((c, i) => ({ ...c, n: i + 1 }));
+  const placed = list.filter(c => Number.isInteger(c.offset)).sort((a, b) => a.offset - b.offset);
+  const tail = list.filter(c => !Number.isInteger(c.offset));
+  const chip = c => `<sup class="cite" data-n="${c.n}">[${c.n}]</sup>`;
+  let out = '', at = 0;
+  placed.forEach(c => {
+    const cut = Math.max(at, Math.min(c.offset, text.length));
+    out += esc(text.slice(at, cut)) + chip(c);
+    at = cut;
+  });
+  return out + esc(text.slice(at)) + tail.map(chip).join('');
 }
 
 // 검색어 안의 매치를 <mark>로 감싼다. esc() 후에 감싸야 하므로 순서에 주의.

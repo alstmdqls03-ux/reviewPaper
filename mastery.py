@@ -19,6 +19,7 @@ So a concept's prerequisites are its outgoing targets via those relations; a con
 no such outgoing edges is foundational (good cold-start entry point).
 """
 
+import json
 import sqlite3
 import time
 import uuid
@@ -50,6 +51,9 @@ CREATE TABLE IF NOT EXISTS notes(
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     text TEXT, source TEXT, concept_id TEXT, created_at REAL,
+    -- 인용 배열 등 JSON 사이드카. messages.meta와 같은 방식 — 컬럼을 늘리는 대신
+    -- 답변에 붙어 있던 각주를 그대로 데리고 온다 (노트가 근거를 잃지 않게)
+    meta TEXT,
     -- 어느 대화에서 저장했는지. 없으면 대화 밖에서 만든 노트다.
     -- SET NULL: 대화를 지워도 노트는 남는다 (노트는 대화보다 오래 사는 산출물이다)
     conv_id TEXT REFERENCES conversations(id) ON DELETE SET NULL
@@ -93,6 +97,8 @@ class MasteryStore:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(notes)")}
         if "conv_id" not in cols:
             self.db.execute("ALTER TABLE notes ADD COLUMN conv_id TEXT")
+        if "meta" not in cols:
+            self.db.execute("ALTER TABLE notes ADD COLUMN meta TEXT")
         self.db.commit()
         self.migrated = self._migrate_legacy(legacy_path)
 
@@ -404,13 +410,16 @@ class MasteryStore:
 
     # ---- notes -----------------------------------------------------------
 
-    def add_note(self, user_id, text, source="", concept_id="", now=None, conv_id=None):
+    def add_note(self, user_id, text, source="", concept_id="", now=None, conv_id=None,
+                 meta=None):
+        """meta는 JSON-able dict (citations 등). 답변에 붙어 있던 각주를 같이 저장한다."""
         now = time.time() if now is None else now
         note_id = uuid.uuid4().hex[:12]
         self.db.execute(
-            """INSERT INTO notes(id,user_id,text,source,concept_id,created_at,conv_id)
-               VALUES(?,?,?,?,?,?,?)""",
-            (note_id, user_id, text, source, concept_id, now, conv_id or None),
+            """INSERT INTO notes(id,user_id,text,source,concept_id,created_at,conv_id,meta)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (note_id, user_id, text, source, concept_id, now, conv_id or None,
+             json.dumps(meta, ensure_ascii=False) if meta else None),
         )
         self.db.commit()
         return note_id
@@ -422,15 +431,20 @@ class MasteryStore:
         "이게 어디서 나온 얘기였지"를 화면에서 알 수 없다. 지워진 대화의 노트는
         conv_id가 NULL이 되므로(ON DELETE SET NULL) 제목도 비어서 나온다.
         """
-        return [
-            dict(r)
-            for r in self.db.execute(
-                """SELECT n.*, c.title AS conv_title
-                     FROM notes n LEFT JOIN conversations c ON c.id = n.conv_id
-                    WHERE n.user_id=? ORDER BY n.created_at DESC, n.id DESC""",
-                (user_id,),
-            )
-        ]
+        out = []
+        for r in self.db.execute(
+            """SELECT n.*, c.title AS conv_title
+                 FROM notes n LEFT JOIN conversations c ON c.id = n.conv_id
+                WHERE n.user_id=? ORDER BY n.created_at DESC, n.id DESC""",
+            (user_id,),
+        ):
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"]) if d.get("meta") else None
+            except ValueError:      # 깨진 사이드카가 목록 전체를 못 쓰게 만들면 안 된다
+                d["meta"] = None
+            out.append(d)
+        return out
 
     def export_markdown(self, user_id):
         notes = self.list_notes(user_id)
@@ -445,6 +459,14 @@ class MasteryStore:
             for n in by_concept[concept]:
                 src = f" — _{n['source']}_" if n["source"] else ""
                 lines.append(f"> {n['text']}{src}")
+                # 인용을 같이 내보낸다. 이게 없으면 내보낸 노트는 출처 없는 주장이 된다.
+                for i, c in enumerate((n.get("meta") or {}).get("citations") or [], 1):
+                    page = f" p.{c['start_page']}" if c.get("start_page") else ""
+                    quote = (c.get("cited_text") or "").strip().replace("\n", " ")
+                    lines.append(f">   [{i}] {c.get('title', '')}{page}"
+                                 + (f" — “{quote[:200]}”" if quote else ""))
+                if n.get("conv_title"):
+                    lines.append(f">   _대화: {n['conv_title']}_")
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
@@ -587,11 +609,25 @@ if __name__ == "__main__":
     assert got["대화 밖에서 쓴 노트"]["conv_title"] is None
     assert got["본문"]["conv_id"] == "c1"
     assert got["본문"]["conv_title"] == "TEM과 SEM 차이", got["본문"]
+    # (8b) 노트가 인용을 데리고 저장된다 — 예전엔 첫 인용의 '제목 문자열' 하나만 남았다
+    cites = [{"title": "Paper A", "start_page": 3, "cited_text": "aaa", "offset": 10,
+              "source_id": "src1"},
+             {"title": "Paper B", "start_page": 7, "cited_text": "bbb", "offset": 25,
+              "source_id": "src2"}]
+    nb.add_note("d", "인용 있는 답변 본문", concept_id="unet", now=day0, conv_id="c1",
+                meta={"citations": cites})
+    got2 = {n["text"]: n for n in nb.list_notes("d")}["인용 있는 답변 본문"]
+    assert got2["meta"]["citations"] == cites, got2["meta"]
+    assert got2["meta"]["citations"][1]["start_page"] == 7      # 첫 인용만이 아니다
+    md = nb.export_markdown("d")
+    assert "[1] Paper A p.3" in md and "[2] Paper B p.7" in md, md   # 내보내기에도 근거가 붙는다
+    assert "대화: TEM과 SEM 차이" in md, md
+
     # 대화를 지워도 노트는 남는다 (ON DELETE SET NULL) — 노트가 대화보다 오래 산다
     with nb.db:
         nb.db.execute("DELETE FROM conversations WHERE id='c1'")
     after = nb.list_notes("d")
-    assert len(after) == 2, "대화를 지웠다고 노트가 사라졌다"
+    assert len(after) == 3, f"대화를 지웠다고 노트가 사라졌다: {len(after)}"
     assert all(n["conv_id"] is None for n in after), after
     assert mg.dashboard("acct", nodes, now=day0)["quiz_attempts"] == 1, "attempts reassigned"
     assert mg.all_learners() == ["acct"], mg.all_learners()  # source folded in, one learner left
