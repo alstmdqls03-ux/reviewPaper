@@ -13,3 +13,14 @@ data/
 corpus.json
 text_cache/
 uploads/
+# 시드 논문 PDF는 배포하지 않는다 (재배포 불가 1편, 비상업 1편).
+# `python fetch_papers.py`로 arXiv에서 받는다 — 목록은 papers/papers.json
+papers/*.pdf
+
+# 계약 문서는 저장소에 넣지 않는다. 체결된 NDA·용역계약서가 여기 있었고,
+# NDA 자체가 비밀유지 의무를 담은 문서다 — 공개하면 그 의무를 위반할 수 있다.
+# 과거 커밋에는 남아 있으므로 공개 전에 히스토리 재작성이 필요하다 (docs/contract/README.md).
+# 디렉터리째 제외하면(`docs/contract/`) git이 안으로 안 들어가서 아래 `!` 예외가
+# 무력화된다. 그래서 `/*`로 내용만 제외한다.
+docs/contract/*
+!docs/contract/README.md

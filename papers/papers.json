@@ -1,0 +1,83 @@
+[
+  {
+    "path": "papers/01-deep-learning-in-em.pdf",
+    "arxiv_id": "2009.08328",
+    "title": "Review: Deep Learning in Electron Microscopy (Ede 2021)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2009.08328",
+    "sha256": "9d5ef9a417f325b1c893a3117edeafaac2038c2973d197d00a8d921044cbb5a3",
+    "bytes": 7056663
+  },
+  {
+    "path": "papers/02-segmentation-survey.pdf",
+    "arxiv_id": "2206.07171",
+    "title": "Segmentation in Large-Scale Cellular EM: A Literature Survey (Aswath 2023)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2206.07171",
+    "sha256": "82dc024a74836200d3d5c82323ea3740d6c3e1e0f92031b4d78cf33e4dac620e",
+    "bytes": 17447218
+  },
+  {
+    "path": "papers/03-microscopy-metadata.pdf",
+    "arxiv_id": "1910.11370",
+    "title": "A Perspective on Microscopy Metadata: Provenance & Quality Control (Huisman 2019)",
+    "license": "CC BY-NC-SA 4.0",
+    "abs_url": "https://arxiv.org/abs/1910.11370",
+    "sha256": "1da120a43976b281c0f7fd8f548df99ee3400406b7a0417538be2380e125ea0c",
+    "bytes": 1656587
+  },
+  {
+    "path": "papers/04-connectomics-metadata.pdf",
+    "arxiv_id": "2401.15251",
+    "title": "EM & XRM Connectomics Imaging & Experimental Metadata Standards (Wimbish 2024)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2401.15251",
+    "sha256": "dcadefa794f302ed1bbab8f720d521d9b82a8dc7f59f95ab2c043beb2f3db7d2",
+    "bytes": 1205854
+  },
+  {
+    "path": "papers/05-ml-materials-microscopy.pdf",
+    "arxiv_id": "2506.08423",
+    "title": "ML for Electron & Scanning Probe Microscopy — Mic-Hackathon 2024",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2506.08423",
+    "sha256": "45a7dbf4a3e54229101b75e7395845ecf6f6f263dc9c0797cc246748bc7f3358",
+    "bytes": 19735010
+  },
+  {
+    "path": "papers/06-microscopy-image-enhancement-survey.pdf",
+    "arxiv_id": "2509.15363",
+    "title": "Recent Advancements in Microscopy Image Enhancement using Deep Learning: A Survey (Dutta 2025)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2509.15363",
+    "sha256": "0758a975993777b5b8ba6c4f39b76617acfc52bdf610b21d094223ac0cf8e4a3",
+    "bytes": 1499077
+  },
+  {
+    "path": "papers/07-automated-multidim-tem-roadmap.pdf",
+    "arxiv_id": "2210.02538",
+    "title": "A Roadmap for Edge-Computing-Enabled Automated Multidimensional TEM (Mukherjee 2022)",
+    "license": "arXiv nonexclusive-distrib 1.0",
+    "abs_url": "https://arxiv.org/abs/2210.02538",
+    "sha256": "ad8989161222c1daf4195e17ca3492d49ca094edd365c7827452be608f30bec4",
+    "bytes": 3031886
+  },
+  {
+    "path": "papers/08-ai-scientific-inference-nanoparticle-em.pdf",
+    "arxiv_id": "2607.10388",
+    "title": "The Evolution of AI from Image Interpretation toward Scientific Inference in Nanoparticle EM (Toulkeridou 2026)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2607.10388",
+    "sha256": "ea44a716234f4370d0db98a2d8dd380fa2c38102c4852856c4a84dc6a01e0b13",
+    "bytes": 2608264
+  },
+  {
+    "path": "papers/09-superres-microscopy-dl-review.pdf",
+    "arxiv_id": "2106.13064",
+    "title": "Advancing Biological Super-Resolution Microscopy through Deep Learning: A Brief Review (Yang 2021)",
+    "license": "CC BY 4.0",
+    "abs_url": "https://arxiv.org/abs/2106.13064",
+    "sha256": "e7647c81757172f7f0aab8c78584f025838dcd64d45a6879c65fd5493ece58cb",
+    "bytes": 635133
+  }
+]

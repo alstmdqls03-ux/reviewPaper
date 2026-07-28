@@ -17,6 +17,9 @@
 ## 실행
 
 ```bash
+# 시드 논문 PDF는 저장소에 없다 (재배포 불가 1편, 비상업 1편 — papers/SOURCES.md).
+python fetch_papers.py              # arXiv에서 9편 받기, 표준 라이브러리만 사용
+
 pip install -r requirements.txt
 
 # (A) 오프라인 데모 — API 키 불필요, 전 기능 mock 구동
@@ -80,7 +83,8 @@ static/index.html 채팅·퀴즈·숙련도·노트·업로드·계정·대화�
 eval.py / eval_gold.py   평가 하네스 / 골드셋 게이트
 locustfile.py     동시성·세션격리 부하   test_*.py  pytest
 Dockerfile / docker-compose.yml / Makefile / ci.sh / .github/workflows/ci.yml
-papers/           시드 리뷰 논문 9편 (출처·라이선스: papers/SOURCES.md)
+papers/           시드 논문 (저장소에 없음 — fetch_papers.py로 받는다)
+papers/papers.json  arXiv ID·라이선스·체크섬  papers/SOURCES.md  배경
 ```
 
 모델: `claude-opus-5` (`MODEL` 환경변수로 교체). 논문 합계 47MB > 32MB 요청 한도 → Files API 필수.

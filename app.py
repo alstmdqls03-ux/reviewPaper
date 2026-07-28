@@ -76,6 +76,12 @@ async def lifespan(app: FastAPI):
         print(f"papers ready: {len(_uploaded)} documents")
     else:
         print("MOCK mode: no papers uploaded, canned LLM responses")
+    # 시드 PDF는 저장소에 없다(라이선스). 없는 채로 돌면 목록엔 보이는데 원문 뷰어와
+    # BM25가 조용히 실패한다 — 무엇을 해야 하는지 기동 로그에서 바로 말한다.
+    missing = [e["path"] for e in corpus.visible_corpus(None) if not Path(e["path"]).exists()]
+    if missing:
+        print(f"⚠ 시드 논문 {len(missing)}편이 없어요 — `python fetch_papers.py`로 받아주세요")
+        obs.log_line(event="seed_papers_missing", count=len(missing), paths=missing[:3])
     yield
 
 
