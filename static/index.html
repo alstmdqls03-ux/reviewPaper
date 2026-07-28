@@ -72,6 +72,8 @@
   .srcrow.open .srctoggle { color: var(--on); }
   .passage { display: none; padding: 2px 0 10px; font-size: 12px; line-height: 1.6; color: var(--on-mute); font-style: italic; border-left: 2px solid var(--border, #6b7078); padding-left: 12px; margin: 0 0 8px; }
   .srcrow.open .passage { display: block; }
+  /* 지금 보고 있는 인용 표시. 높이를 바꾸지 않는다 — 바꾸면 본문이 밀려 내려간다 */
+  .srcrow.cur { box-shadow: inset 3px 0 0 var(--on); padding-left: 9px; margin-left: -12px; }
   .cite { cursor: pointer; }
   .cite:hover { color: var(--on); }
   .empty { color: var(--on-mute); font-size: 13px; }
@@ -739,8 +741,15 @@ function newBotBubble(){
   };
   bubble.onclick = e => {
     const s = e.target.closest('.cite'); if(!s) return;
+    // 한 클릭에 한 가지만 움직인다. 예전엔 아래 출처 줄이 펼쳐지며 본문이 밀려
+    // 내려가는 동시에 오른쪽 뷰어가 덮어서, 읽던 문장을 찾으려면 뷰어를 닫고
+    // 스크롤을 되돌려야 했다. 구절은 뷰어가 원문 위에 강조해서 보여주므로
+    // 줄을 펼칠 이유도 없다 — 어느 줄인지는 표시만 한다(높이 변화 없음).
     const row = srcBox.querySelector('.srcrow[data-n="'+s.dataset.n+'"]');
-    if(row){ row.classList.add('open'); row.scrollIntoView({block:'nearest', behavior:'smooth'}); }
+    if(row){
+      srcBox.querySelectorAll('.srcrow.cur').forEach(r => r.classList.remove('cur'));
+      row.classList.add('cur');
+    }
     const c = cites[s.dataset.n];
     if(c && c.source_id) openViewer(c.source_id, c.start_page || 1, c.cited_text || '');
   };
