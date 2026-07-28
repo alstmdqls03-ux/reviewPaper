@@ -182,6 +182,7 @@ class NoteIn(BaseModel):
     text: str
     source: str = ""
     concept_id: str = ""
+    conversation_id: str | None = None  # 어느 대화에서 저장했는지
 
 
 class NameIn(BaseModel):
@@ -355,7 +356,8 @@ async def mark_mastery(body: MarkIn, x_device_id: str = Header(None)):
 
 @app.post("/notes")
 async def add_note(body: NoteIn, x_device_id: str = Header(None)):
-    return {"note_id": MASTERY.add_note(learner(x_device_id), body.text, body.source, body.concept_id)}
+    return {"note_id": MASTERY.add_note(learner(x_device_id), body.text, body.source,
+                                        body.concept_id, conv_id=body.conversation_id)}
 
 
 @app.get("/notes")

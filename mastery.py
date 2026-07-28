@@ -49,7 +49,10 @@ CREATE TABLE IF NOT EXISTS mastery(
 CREATE TABLE IF NOT EXISTS notes(
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    text TEXT, source TEXT, concept_id TEXT, created_at REAL
+    text TEXT, source TEXT, concept_id TEXT, created_at REAL,
+    -- 어느 대화에서 저장했는지. 없으면 대화 밖에서 만든 노트다.
+    -- SET NULL: 대화를 지워도 노트는 남는다 (노트는 대화보다 오래 사는 산출물이다)
+    conv_id TEXT REFERENCES conversations(id) ON DELETE SET NULL
 );
 CREATE TABLE IF NOT EXISTS quiz_attempts(
     id TEXT PRIMARY KEY,
@@ -74,11 +77,22 @@ class MasteryStore:
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
-        # users 테이블은 accounts.py 소유지만, FK 대상이라 여기서도 보장해 둔다
-        # (CREATE IF NOT EXISTS라 누가 먼저 돌든 같다).
+        # users(accounts.py) / conversations(history.py)는 남의 테이블이지만 FK 대상이고
+        # list_notes가 조인한다. CREATE IF NOT EXISTS라 누가 먼저 돌든 결과가 같아서
+        # 모듈 초기화 순서를 신경 쓰지 않아도 된다 (corpus.SOURCES_DDL과 같은 방식).
         self.db.executescript(
-            "CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, display_name TEXT, created_at REAL);")
+            """CREATE TABLE IF NOT EXISTS users(
+                   id TEXT PRIMARY KEY, display_name TEXT, created_at REAL);
+               CREATE TABLE IF NOT EXISTS conversations(
+                   id TEXT PRIMARY KEY, user_id TEXT, title TEXT,
+                   created_at REAL, updated_at REAL, deleted INTEGER DEFAULT 0);""")
         self.db.executescript(SCHEMA)
+        # conv_id는 notes가 출시된 뒤에 붙었다. 기존 DB는 제자리 이관한다
+        # (history.messages.meta 때와 같은 방식). ALTER는 FK 절을 못 붙이므로
+        # 옛 DB에서는 컬럼만 생기고 FK는 없다 — 새로 만든 DB에는 SCHEMA대로 FK가 붙는다.
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(notes)")}
+        if "conv_id" not in cols:
+            self.db.execute("ALTER TABLE notes ADD COLUMN conv_id TEXT")
         self.db.commit()
         self.migrated = self._migrate_legacy(legacy_path)
 
@@ -385,21 +399,30 @@ class MasteryStore:
 
     # ---- notes -----------------------------------------------------------
 
-    def add_note(self, user_id, text, source="", concept_id="", now=None):
+    def add_note(self, user_id, text, source="", concept_id="", now=None, conv_id=None):
         now = time.time() if now is None else now
         note_id = uuid.uuid4().hex[:12]
         self.db.execute(
-            "INSERT INTO notes(id,user_id,text,source,concept_id,created_at) VALUES(?,?,?,?,?,?)",
-            (note_id, user_id, text, source, concept_id, now),
+            """INSERT INTO notes(id,user_id,text,source,concept_id,created_at,conv_id)
+               VALUES(?,?,?,?,?,?,?)""",
+            (note_id, user_id, text, source, concept_id, now, conv_id or None),
         )
         self.db.commit()
         return note_id
 
     def list_notes(self, user_id):
+        """노트 + 그 노트가 나온 대화의 제목.
+
+        제목을 같이 주는 이유: 여러 대화에서 저장한 노트가 한 목록에 뒤섞이면
+        "이게 어디서 나온 얘기였지"를 화면에서 알 수 없다. 지워진 대화의 노트는
+        conv_id가 NULL이 되므로(ON DELETE SET NULL) 제목도 비어서 나온다.
+        """
         return [
             dict(r)
             for r in self.db.execute(
-                "SELECT * FROM notes WHERE user_id=? ORDER BY created_at DESC, id DESC",
+                """SELECT n.*, c.title AS conv_title
+                     FROM notes n LEFT JOIN conversations c ON c.id = n.conv_id
+                    WHERE n.user_id=? ORDER BY n.created_at DESC, n.id DESC""",
                 (user_id,),
             )
         ]
@@ -547,6 +570,24 @@ if __name__ == "__main__":
     assert "resolution" in macct, macct                           # devA's other progress moved
     assert mg.get_mastery("devA", now=day0) == {}, "source cleared"
     assert len(mg.list_notes("acct")) == 1, "notes reassigned"
+
+    # (8) 노트는 어느 대화에서 나왔는지를 들고 다닌다
+    nb = mkuser(MasteryStore(":memory:", legacy_path=None))
+    nb.db.execute("INSERT INTO conversations(id,user_id,title) VALUES('c1','d','TEM과 SEM 차이')")
+    nb.db.commit()
+    nb.add_note("d", "본문", concept_id="unet", now=day0, conv_id="c1")
+    nb.add_note("d", "대화 밖에서 쓴 노트", now=day0)          # conv_id 없음도 허용
+    got = {n["text"]: n for n in nb.list_notes("d")}   # 같은 시각이라 순서는 id로 갈린다
+    assert got["대화 밖에서 쓴 노트"]["conv_id"] is None
+    assert got["대화 밖에서 쓴 노트"]["conv_title"] is None
+    assert got["본문"]["conv_id"] == "c1"
+    assert got["본문"]["conv_title"] == "TEM과 SEM 차이", got["본문"]
+    # 대화를 지워도 노트는 남는다 (ON DELETE SET NULL) — 노트가 대화보다 오래 산다
+    with nb.db:
+        nb.db.execute("DELETE FROM conversations WHERE id='c1'")
+    after = nb.list_notes("d")
+    assert len(after) == 2, "대화를 지웠다고 노트가 사라졌다"
+    assert all(n["conv_id"] is None for n in after), after
     assert mg.dashboard("acct", nodes, now=day0)["quiz_attempts"] == 1, "attempts reassigned"
     assert mg.all_learners() == ["acct"], mg.all_learners()  # source folded in, one learner left
 
