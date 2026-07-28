@@ -545,6 +545,15 @@ const ONBOARD = `<div class="empty onboard">
 log.innerHTML = ONBOARD;
 function renderSuggestions(){
   suggest.innerHTML = '';
+  if(!SUGGESTIONS.length){
+    // 체크한 소스에 태그된 개념이 없으면 칩을 지어내지 않는다 — 예전엔 전체 그래프로
+    // 되돌아가서, 방금 해제한 논문의 개념이 추천으로 떴다.
+    const note = document.createElement('div');
+    note.className = 'ob-hint';
+    note.textContent = '체크한 소스에서 뽑을 개념이 아직 없어요 — 직접 물어보세요.';
+    suggest.appendChild(note);
+    return;
+  }
   SUGGESTIONS.forEach(s => {
     const el = document.createElement('span');
     el.textContent = s;
@@ -561,7 +570,8 @@ async function refreshSuggestions(){
     const r = await fetch('/suggestions?sources=' + encodeURIComponent(ids.join(',')), { headers: hdr() });
     if(!r.ok) return;
     const d = await r.json();
-    if(d.suggestions && d.suggestions.length){ SUGGESTIONS = d.suggestions; renderSuggestions(); }
+    // 빈 응답도 그대로 반영한다. 예전엔 빈 목록을 무시해서 직전 소스의 추천이 남았다.
+    if(d.suggestions){ SUGGESTIONS = d.suggestions; renderSuggestions(); suggest.style.display = ''; }
   } catch(e){ /* 기본 추천을 그대로 쓴다 */ }
 }
 

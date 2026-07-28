@@ -123,6 +123,22 @@ def test_source_page_and_suggestions():
     assert 1 <= len(narrow["suggestions"]) <= 4, narrow
     assert narrow["from_sources"] == 1 and wide["from_sources"] == len(reg)
     assert all(s.strip().endswith("?") or "설명해줘" in s for s in narrow["suggestions"]), narrow
+
+    # 그래프에 개념이 없는 소스만 고르면 추천은 비어야 한다. 예전엔 `or NODES()`로
+    # 전체 그래프를 되돌려서, 방금 해제한 공용 논문의 개념이 칩 4개를 채웠다.
+    added = None
+    try:
+        uid = app.learner("suggdev")   # 엔드포인트가 device -> user로 푸는 것과 같은 경로
+        e = corpus.add_pdf("uploads/sugg/none.pdf", "그래프에 없는 논문", owner=uid)
+        added = e["id"]
+        out = asyncio.run(app.suggestions(sources=e["id"], x_device_id="suggdev"))
+        assert out["suggestions"] == [], out          # 지어내지 않는다
+        assert out["from_sources"] == 1, out          # 소스는 골랐다 (빈 선택과 구분된다)
+    finally:
+        if added:
+            db = corpus.connect()
+            with db:
+                db.execute("DELETE FROM sources WHERE id=?", (added,))
     print(f"viewer+suggestions ok: {page['total_pages']} pages, {len(narrow['suggestions'])} questions")
 
 

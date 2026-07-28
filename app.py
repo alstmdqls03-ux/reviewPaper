@@ -502,7 +502,10 @@ async def suggestions(sources: str = "", x_device_id: str = Header(None)):
     except ValueError:
         return {"suggestions": [], "from_sources": 0}  # 고른 소스가 없으면 추천도 없다
     tset = set(titles)
-    hits = [n for n in NODES() if tset & set(n.get("sources") or [])] or NODES()
+    # 겹치는 개념이 없으면 빈 목록으로 나간다. 예전엔 `or NODES()`로 전체 그래프를
+    # 되돌렸는데, 그러면 방금 체크 해제한 논문의 개념이 추천칩에 뜬다 — 내가 올린
+    # PDF 한 편만 고른 순간 화면이 공용 논문 얘기를 시작하는 동작이었다.
+    hits = [n for n in NODES() if tset & set(n.get("sources") or [])]
     known = set(MASTERY.get_mastery(uid) or {})
     hits.sort(key=lambda n: n["id"] in known)  # 아직 안 배운 개념 먼저
     out = [f"{n['label'].split(' /')[0]}에 대해 설명해줘" for n in hits[:3]]
