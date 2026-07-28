@@ -141,6 +141,16 @@ def _pick_sources(sources: list[str] | None,
     picked = [e for e in reg if want is None or e["id"] in want]
     if not picked:
         raise ValueError("선택한 소스를 찾을 수 없어요. 소스 목록을 새로고침해 주세요.")
+    # 고른 소스가 모델 창에 안 들어가면 여기서 막는다. 안 막으면 실키에서 API가
+    # 400을 던지고, 사용자는 무엇을 줄여야 하는지 모르는 채로 실패를 본다.
+    corpus.ensure_estimates(picked)
+    total = sum(e.get("est_tokens") or 0 for e in picked)
+    if total > settings.MAX_CONTEXT_TOKENS:
+        big = max(picked, key=lambda e: e.get("est_tokens") or 0)
+        raise ValueError(
+            f"선택한 소스 {len(picked)}편이 너무 커요 (약 {total // 1000:,}k 토큰 / "
+            f"한도 {settings.MAX_CONTEXT_TOKENS // 1000:,}k). 몇 편 해제하고 다시 시도해 주세요. "
+            f"가장 큰 소스: “{big['title'][:60]}” 약 {(big.get('est_tokens') or 0) // 1000:,}k 토큰")
     paths = {e["path"] for e in picked}
     return [u for u in _uploaded if u.get("path") in paths], [e["title"] for e in picked]
 
@@ -435,10 +445,13 @@ async def get_corpus(x_device_id: str = Header(None)):
     """The sources this user may read: shared papers + their own uploads.
     Order = registry order (stable), so the UI list doesn't reshuffle."""
     uid = learner(x_device_id)
+    vis = corpus.ensure_estimates(corpus.visible_corpus(uid))
     return {"sources": [{"id": e["id"], "title": e["title"], "owner": e.get("owner"),
-                         "mine": e.get("owner") == uid, "added_at": e.get("added_at")}
-                        for e in corpus.visible_corpus(uid)],
-            "owned": corpus.owned_count(uid), "max_sources": settings.MAX_SOURCES}
+                         "mine": e.get("owner") == uid, "added_at": e.get("added_at"),
+                         "pages": e.get("pages"), "est_tokens": e.get("est_tokens")}
+                        for e in vis],
+            "owned": corpus.owned_count(uid), "max_sources": settings.MAX_SOURCES,
+            "max_context_tokens": settings.MAX_CONTEXT_TOKENS}
 
 
 @app.get("/corpus/{sid}/page/{page}")

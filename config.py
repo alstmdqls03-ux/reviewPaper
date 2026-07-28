@@ -24,6 +24,10 @@ class Settings:
         self.MAX_MESSAGE_CHARS = int(os.getenv("MAX_MESSAGE_CHARS", "4000"))
         self.MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
         self.MAX_SOURCES = int(os.getenv("MAX_SOURCES", "50"))    # per user, own uploads only
+        # 한 질문의 문서 블록이 쓸 수 있는 입력 토큰 상한. 모델 창(1M)에서 대화 이력·
+        # 시스템 프롬프트·출력 몫을 뺀 값이다. 넘으면 API가 400을 던지기 전에 우리가 막고
+        # 무엇을 해야 하는지 알려준다. 참고: 시드 9편 전체 ≈ 368k.
+        self.MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "800000"))
         # Mock when explicitly asked OR when there is no key to call with. llm.MOCK reads
         # this exact value, so /healthz can't claim "mock: false" while answers are canned.
         self.MOCK = os.getenv("MOCK_LLM") == "1" or not os.getenv("ANTHROPIC_API_KEY")
@@ -44,6 +48,7 @@ class Settings:
             "max_message_chars": self.MAX_MESSAGE_CHARS,
             "max_upload_mb": self.MAX_UPLOAD_MB,
             "max_sources": self.MAX_SOURCES,
+            "max_context_tokens": self.MAX_CONTEXT_TOKENS,
             "mock": self.MOCK,
             "admin_auth_enabled": bool(self.ADMIN_TOKEN),
         }

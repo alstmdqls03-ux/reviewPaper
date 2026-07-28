@@ -192,6 +192,8 @@
   .nconv:hover { border-bottom-color: var(--on); }
   /* --- 소스 패널 --- */
   #sourcesbody { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .srccount.over { color: var(--danger); }
+  .stok { flex-shrink: 0; font-size: 10px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
   .srccount { margin-right: auto; align-self: center; font-size: 11px; color: var(--on-mute); text-transform: uppercase; letter-spacing: .8px; }
   .srcitem { display: flex; align-items: center; gap: 12px; border: 1px solid var(--hairline); border-radius: var(--radius-md); padding: 12px 14px; margin-bottom: 8px; background: var(--canvas-soft); }
   .srcitem input[type=checkbox] { width: 17px; height: 17px; flex-shrink: 0; accent-color: var(--on); cursor: pointer; }
@@ -1286,6 +1288,7 @@ function hideCitePop(){ citePop.classList.remove('show'); }
 // ---- 소스 목록 + 선택 ----
 let SOURCES = [];  // [{id, title, mine, added_at}] as returned by GET /corpus
 let SRC_MAX = 0;   // 사용자당 업로드 상한 (서버 설정)
+let SRC_BUDGET = 0; // 한 질문에 넣을 수 있는 입력 토큰 상한 (서버 설정)
 
 // 소스 선택은 '대화별'이다. NotebookLM의 노트북 = 소스 묶음 + 대화이고, 선택이
 // 전역 1개면 화면 두 곳이 서로 다른 소스 집합을 주장하게 된다 (docs/benchmark-gap.md G1·G2):
@@ -1356,6 +1359,7 @@ async function loadSources(){
     const d = await r.json();
     SOURCES = d.sources || [];
     SRC_MAX = d.max_sources || 0;
+    SRC_BUDGET = d.max_context_tokens || 0;
     const sel = getSelected();
     if(sel && prev.size){  // 선택을 이미 손댄 상태라면, 새로 올라온 소스는 체크해서 들어온다
       const fresh = SOURCES.map(s => s.id).filter(id => !prev.has(id));
@@ -1383,10 +1387,17 @@ function renderSources(){
   const body = document.getElementById('sourcesbody');
   const on = new Set(selectedIds());
   const owned = SOURCES.filter(s => s.mine).length;
+  // 고른 소스의 대략 크기. 한도에 가까워지는 걸 눌러보기 전에 알 수 있게 한다.
+  const tok = SOURCES.filter(s => on.has(s.id)).reduce((a, s) => a + (s.est_tokens || 0), 0);
+  const overBudget = SRC_BUDGET && tok > SRC_BUDGET;
   const countEl = document.getElementById('srccount');
-  countEl.textContent = `${on.size}/${SOURCES.length}편` + (SRC_MAX ? ` · 내 ${owned}/${SRC_MAX}` : '');
+  countEl.textContent = `${on.size}/${SOURCES.length}편` +
+    (tok ? ` · ${Math.round(tok / 1000).toLocaleString()}k 토큰` : '');
+  countEl.classList.toggle('over', !!overBudget);
   countEl.title = `${SOURCES.length}편 중 ${on.size}편 선택` +
-    (SRC_MAX ? ` · 내 업로드 ${owned}/${SRC_MAX}편` : '');   // 줄인 문구의 원문은 툴팁에
+    (SRC_MAX ? ` · 내 업로드 ${owned}/${SRC_MAX}편` : '') +
+    (tok ? `\n선택한 소스 약 ${tok.toLocaleString()} 토큰` : '') +
+    (SRC_BUDGET ? ` / 한도 ${SRC_BUDGET.toLocaleString()}` : '');
   // 전체선택/전체해제 버튼 2개를 체크박스 1개로 합쳤다. 일부만 골랐으면 중간 상태.
   const allbox = document.getElementById('srctoggleall');
   allbox.checked = SOURCES.length > 0 && on.size === SOURCES.length;
@@ -1412,7 +1423,8 @@ function renderSources(){
     cb.onchange = onSourceToggle;
     row.appendChild(cb);
     row.insertAdjacentHTML('beforeend',
-      `<div class="stitle" title="${esc(s.title)}">${esc(s.title)}</div>` +
+      `<div class="stitle" title="${esc(s.title)}${s.pages ? ` — ${s.pages}쪽, 약 ${(s.est_tokens||0).toLocaleString()} 토큰` : ''}">${esc(s.title)}</div>` +
+      (s.est_tokens ? `<span class="stok">${Math.round(s.est_tokens/1000)}k</span>` : '') +
       `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>` +
       // 공용 논문은 남들도 보는 것이라 이름 변경·삭제 버튼 자체를 주지 않는다
       (s.mine ? `<span class="srcact"><span class="ren" title="이름 바꾸기">✎</span>`+

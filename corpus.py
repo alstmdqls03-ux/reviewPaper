@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS sources(
     title TEXT NOT NULL,
     owner TEXT,                  -- NULL = 공용 시드, 그 외 = 올린 사람의 user_id
     sha TEXT,                    -- 내용 해시: 이름만 바꾼 같은 PDF를 잡는다
-    added_at REAL
+    added_at REAL,
+    pages INTEGER,               -- 쪽 수 (추출 시점 기준)
+    est_tokens INTEGER           -- 이 논문을 프롬프트에 넣을 때의 대략 토큰 수
 );
 CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner);
 CREATE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha);
@@ -77,6 +79,11 @@ def connect(db_path: str | None = None):
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")     # conversation_sources의 FK가 실제로 강제되게
     db.executescript(SOURCES_DDL)
+    # pages/est_tokens는 sources가 나온 뒤에 붙었다. 기존 DB는 제자리 ALTER로.
+    cols = {r["name"] for r in db.execute("PRAGMA table_info(sources)")}
+    for col, typ in (("pages", "INTEGER"), ("est_tokens", "INTEGER")):
+        if col not in cols:
+            db.execute(f"ALTER TABLE sources ADD COLUMN {col} {typ}")
     db.commit()
     _db = db
     _migrate_from_json()
@@ -85,8 +92,49 @@ def connect(db_path: str | None = None):
 
 def _row(r) -> dict:
     """DB 행 -> 기존 JSON 레지스트리와 같은 모양의 dict (호출부가 안 바뀌게)."""
-    return {"id": r["id"], "path": r["path"], "title": r["title"],
-            "owner": r["owner"], "sha": r["sha"], "added_at": r["added_at"]}
+    d = {"id": r["id"], "path": r["path"], "title": r["title"],
+         "owner": r["owner"], "sha": r["sha"], "added_at": r["added_at"]}
+    keys = r.keys()
+    d["pages"] = r["pages"] if "pages" in keys else None
+    d["est_tokens"] = r["est_tokens"] if "est_tokens" in keys else None
+    return d
+
+
+# 문서 블록 1개가 프롬프트에서 차지하는 대략 토큰 수.
+# 본문은 영문 논문 기준 ~4자/토큰, 거기에 PDF 쪽마다 레이아웃·이미지 오버헤드가 붙는다.
+# 정확한 수가 목적이 아니라 "한도를 넘겼나"를 미리 알기 위한 것이라 보수적으로 잡는다
+# (실제보다 크게 잡아야 API가 400을 던지기 전에 우리가 먼저 막는다).
+CHARS_PER_TOKEN = 4
+PAGE_OVERHEAD_TOKENS = 250
+
+
+def estimate_tokens(path: str) -> tuple[int, int]:
+    """(쪽 수, 추정 토큰). 추출 실패하면 (0, 0) — 막지 않고 통과시킨다."""
+    try:
+        pages = extract_pages(path)
+    except Exception:  # noqa: BLE001 — 추정 실패가 업로드를 막으면 안 된다
+        return (0, 0)
+    chars = sum(len(t) for _, t in pages)
+    return (len(pages), chars // CHARS_PER_TOKEN + len(pages) * PAGE_OVERHEAD_TOKENS)
+
+
+def ensure_estimates(entries: list[dict]) -> list[dict]:
+    """est_tokens가 비어 있는 엔트리만 계산해 저장한다 (엔트리당 딱 한 번).
+
+    ponytail: 등록 시점에 채우고 여기서는 백필만 한다. 매 요청마다 text_cache를
+    다시 읽으면 10편에 파일 I/O 10번이라, 한도 검사 한 줄이 채팅보다 비싸진다.
+    """
+    todo = [e for e in entries if not e.get("est_tokens")]
+    if not todo:
+        return entries
+    db = connect()
+    with db:
+        for e in todo:
+            pages, est = estimate_tokens(e["path"])
+            e["pages"], e["est_tokens"] = pages, est
+            db.execute("UPDATE sources SET pages=?, est_tokens=? WHERE id=?",
+                       (pages, est, e["id"]))
+    return entries
 
 
 def _migrate_from_json() -> int:
@@ -175,12 +223,13 @@ def add_pdf(path: str, title: str, owner: str | None = None) -> dict:
             (sha, owner)).fetchone()
         if dup:
             return _row(dup)               # 바이트까지 같은 논문이 이미 있다
+    pages, est = estimate_tokens(path)     # 등록 시점에 한 번만 (한도 검사가 SQL 합계로 끝나게)
     entry = {"id": source_id(path), "path": path, "title": title, "owner": owner,
-             "added_at": time.time(), "sha": sha}
+             "added_at": time.time(), "sha": sha, "pages": pages, "est_tokens": est}
     with db:                               # COMMIT / 예외 시 ROLLBACK
         db.execute(
-            """INSERT INTO sources(id,path,title,owner,sha,added_at)
-               VALUES(:id,:path,:title,:owner,:sha,:added_at)
+            """INSERT INTO sources(id,path,title,owner,sha,added_at,pages,est_tokens)
+               VALUES(:id,:path,:title,:owner,:sha,:added_at,:pages,:est_tokens)
                ON CONFLICT(path) DO NOTHING""", entry)
     # 경합에서 졌으면 먼저 들어간 행이 정답이다 (내 dict가 아니라 DB를 믿는다)
     row = db.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()

@@ -169,10 +169,48 @@ def test_empty_selection_is_not_everything():
     print("empty-selection guard ok")
 
 
+def test_context_budget_blocks_before_the_api_does():
+    """고른 소스가 모델 창을 넘으면 400으로 먼저 막는다.
+
+    안 막으면 실키에서 API가 400을 던지고, 화면에는 무엇을 줄여야 하는지 없는
+    실패만 남는다. 추정은 보수적이어야 한다 — 실제보다 크게 잡아야 먼저 막힌다.
+    """
+    import app
+    from config import settings
+
+    reg = corpus.ensure_estimates(corpus.load_corpus())
+    total = sum(e["est_tokens"] or 0 for e in reg)
+    assert total > 0, "토큰 추정이 하나도 안 채워졌다"
+
+    # 지금 코퍼스는 한도 안이라 통과해야 한다
+    _, titles = app._pick_sources(None)
+    assert len(titles) == len(reg)
+
+    orig = settings.MAX_CONTEXT_TOKENS
+    try:
+        settings.MAX_CONTEXT_TOKENS = total // 2          # 한도를 반으로 낮춘다
+        try:
+            app._pick_sources([e["id"] for e in reg])
+            raise AssertionError("한도를 넘겼는데 통과했다")
+        except ValueError as e:
+            msg = str(e)
+            assert "너무 커요" in msg, msg
+            assert "토큰" in msg and "해제" in msg, msg   # 무엇을 해야 하는지 적혀 있어야 한다
+            assert "가장 큰 소스" in msg, msg              # 어느 것부터 뺄지도
+        # 한 편만 고르면 다시 통과
+        smallest = min(reg, key=lambda e: e["est_tokens"] or 0)
+        _, one = app._pick_sources([smallest["id"]])
+        assert one == [smallest["title"]]
+    finally:
+        settings.MAX_CONTEXT_TOKENS = orig
+    print(f"context budget ok: {total:,} tokens across {len(reg)} sources")
+
+
 if __name__ == "__main__":
     test_ids_stable_and_unique()
     test_selection_narrows_titles()
     test_uploads_are_private_to_their_owner()
     test_source_page_and_suggestions()
     test_empty_selection_is_not_everything()
+    test_context_budget_blocks_before_the_api_does()
     print("all source self-checks passed")
