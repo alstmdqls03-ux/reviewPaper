@@ -1299,7 +1299,8 @@ async function loadViewerPage(){
       document.getElementById('vtitle').textContent = d.title;
       document.getElementById('vpage').textContent = '삭제됨';
       document.getElementById('vprev').disabled = document.getElementById('vnext').disabled = true;
-      body.innerHTML = `<div class="vgone">이 소스는 ${esc(shortTime(d.deleted_at))}에 삭제됐어요. `
+      // "방금에 삭제됐어요"가 되지 않게 조사 없이 붙인다 (shortTime은 "방금"도 돌려준다)
+      body.innerHTML = `<div class="vgone">이 소스는 ${esc(shortTime(d.deleted_at))} 삭제됐어요. `
         + `원문은 더 볼 수 없지만, 이 답변이 인용한 구절은 아래에 남아 있어요.</div>`
         + (VIEW.quote ? `<blockquote>${esc(VIEW.quote)}</blockquote>`
                       : '<div class="empty">이 인용에는 저장된 구절이 없어요.</div>');
