@@ -70,6 +70,46 @@ def _sclient():
     return _sync_client
 
 
+# ---- API 오류 -> 사람이 읽고 행동할 수 있는 문구 --------------------------------
+# 예전엔 `f"{type(e).__name__}: {e}"`를 그대로 화면에 뿌려서, 답변 자리에
+# `RateLimitError: Error code: 429 - {...}`가 떴다. 무엇을 해야 하는지가 없고,
+# 429가 알려주는 "몇 초 뒤에"도 버려졌다.
+def friendly_error(e: BaseException) -> dict:
+    """{"message": 사용자용 한 문장, "retry_after": 초|None, "kind": 로그용}.
+
+    본문(str(e))은 붙이지 않는다 — 응답 바디에 요청 내용이 되비칠 수 있고,
+    사용자가 할 수 있는 일이 그 안에 없다. 진단은 구조화 로그가 맡는다.
+    """
+    status = getattr(e, "status_code", None)
+    retry = None
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        try:                                   # 429/529는 Retry-After로 대기 시간을 준다
+            ra = resp.headers.get("retry-after")
+            retry = int(float(ra)) if ra else None
+        except (AttributeError, ValueError, TypeError):
+            retry = None
+    if status == 429:
+        when = f"{retry}초 뒤에" if retry else "잠시 뒤에"
+        return {"message": f"요청이 몰렸어요. {when} 다시 시도해 주세요.",
+                "retry_after": retry, "kind": "rate_limit"}
+    if status in (500, 502, 503, 529):
+        return {"message": "모델 쪽이 혼잡해요. 잠시 뒤에 다시 시도해 주세요.",
+                "retry_after": retry or 10, "kind": "overloaded"}
+    if status in (401, 403):                   # 운영자 문제지 사용자 문제가 아니다
+        return {"message": "서버의 API 키 설정에 문제가 있어요. 관리자에게 알려주세요.",
+                "retry_after": None, "kind": "auth"}
+    if status == 400:
+        return {"message": "이번 요청을 모델이 받지 못했어요. 고른 소스를 줄여서 다시 시도해 주세요.",
+                "retry_after": None, "kind": "bad_request"}
+    if isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError)) or \
+            type(e).__name__ in ("APIConnectionError", "APITimeoutError"):
+        return {"message": "연결이 끊겼어요. 다시 시도해 주세요.",
+                "retry_after": None, "kind": "connection"}
+    return {"message": "답변을 만들지 못했어요. 다시 시도해 주세요.",
+            "retry_after": None, "kind": type(e).__name__}
+
+
 # ---- Streaming chat -----------------------------------------------------------
 async def stream_chat(messages: list, system: str):
     """Async generator yielding ("text", str) and ("citation", dict) tuples."""
@@ -261,5 +301,21 @@ if __name__ == "__main__":
         assert len(quiz) == 4 and all("answer_index" in q for q in quiz)
         v = judge("q", text, cites)
         assert 1 <= v["faithfulness"] <= 5
+        # friendly_error: 상태코드별 문구와 Retry-After 반영
+        class _Resp:
+            def __init__(self, h): self.headers = h
+        class _Err(Exception):
+            def __init__(self, status, headers=None):
+                self.status_code, self.response = status, _Resp(headers or {})
+        r = friendly_error(_Err(429, {"retry-after": "7"}))
+        assert r["retry_after"] == 7 and "7초 뒤에" in r["message"], r
+        assert friendly_error(_Err(429))["retry_after"] is None      # 헤더가 없어도 죽지 않는다
+        assert friendly_error(_Err(529))["kind"] == "overloaded"
+        assert friendly_error(_Err(401))["kind"] == "auth"
+        assert friendly_error(ConnectionError("boom"))["kind"] == "connection"
+        # 본문이 화면 문구에 새면 안 된다 (요청 내용이 되비칠 수 있다)
+        leak = friendly_error(_Err(400))
+        assert "Error code" not in leak["message"] and "{" not in leak["message"], leak
+        assert friendly_error(RuntimeError("x"))["kind"] == "RuntimeError"
         print(f"llm.py self-check ok (MOCK={MOCK}): {len(text)} chars, {len(cites)} cite, {len(quiz)} quiz Q")
     asyncio.run(_demo())

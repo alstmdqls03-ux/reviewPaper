@@ -304,8 +304,25 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                             meta={"citations": citations, "sources": used_titles})
                 yield _sse({"type": "done", "concepts": concepts,
                             "quiz_available": sess.quiz_available, "turns": sess.turns})
-            except Exception as e:
-                yield _sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
+            except Exception as e:  # noqa: BLE001 — 스트림 중단은 500이 아니라 화면의 상태다
+                # 여기까지 받은 답은 버리지 않는다. 토큰 비용은 이미 나갔고(300쪽을
+                # 읽힌 뒤일 수 있다), 예전엔 부분 답변이 기록에 안 남아서 새로고침하면
+                # 통째로 사라졌다. 부분이라고 표시해서 저장한다.
+                partial = "".join(parts)
+                saved = bool(partial.strip())
+                if saved:
+                    sess.add_user(message)
+                    sess.add_assistant(partial, [])
+                    HIST.append(conv_id, "user", message)
+                    HIST.append(conv_id, "assistant", partial,
+                                meta={"citations": citations, "sources": used_titles,
+                                      "partial": True})
+                info = llm.friendly_error(e)
+                obs.log_line(event="chat_stream_failed", kind=info["kind"],
+                             error=f"{type(e).__name__}: {e}", conv_id=conv_id,
+                             partial_chars=len(partial), partial_saved=saved)
+                yield _sse({"type": "error", "message": info["message"],
+                            "retry_after": info["retry_after"], "partial_saved": saved})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
