@@ -265,6 +265,48 @@ def test_context_budget_blocks_before_the_api_does():
     print(f"context budget ok: {total:,} tokens across {len(reg)} sources")
 
 
+def test_orphan_upload_gets_an_owner():
+    """v2 이전 업로드(owner=NULL)는 '공용'으로 굳어 아무도 못 지웠다. 이제 귀속된다.
+
+    시드(papers/)는 절대 귀속되면 안 된다 — 한 사람이 공용 논문을 다 가져가면
+    다른 사용자 목록이 비어버린다.
+    """
+    import asyncio
+    import app
+
+    db = corpus.connect()
+    # 실제 DB에 남아 있는 고아 행까지 같이 귀속된다 — 테스트가 진짜 데이터의 주인을
+    # 바꿔놓지 않도록 원래 상태를 기억해뒀다가 되돌린다.
+    real_orphans = [r["id"] for r in db.execute(
+        "SELECT id FROM sources WHERE owner IS NULL AND path NOT LIKE 'papers/%'")]
+    with db:                                   # 주인 없는 업로드 한 건을 만든다
+        db.execute("""INSERT INTO sources(id,path,title,owner,added_at,status)
+                      VALUES('orph00000001','uploads/orphan.pdf','주인 없는 논문',
+                             NULL,0,'ready')""")
+    seeds_before = {p for p, _ in corpus.shared_papers() if p.startswith("papers/")}
+    try:
+        uid = app.learner("orphdev")
+        assert corpus.claim_orphans(uid) >= 1
+        row = next(e for e in corpus.load_corpus() if e["id"] == "orph00000001")
+        assert row["owner"] == uid, row        # 이제 ✎ 🗑 가 그려진다
+        # 시드는 그대로 남고, 주인 없는 업로드는 shared_papers()에서 빠진다.
+        # (shared_papers()는 전역 개념 그래프의 재료다 — 한 사람의 PDF가 거기 섞여 있었다)
+        now_shared = {p for p, _ in corpus.shared_papers()}
+        assert now_shared == seeds_before, now_shared ^ seeds_before
+        assert corpus.claim_orphans(uid) == 0  # 두 번째 호출은 아무것도 안 한다
+
+        other = app.learner("orphdev2")        # 남에게는 더 이상 안 보인다
+        assert "orph00000001" not in {e["id"] for e in corpus.visible_corpus(other)}
+        assert corpus.remove("orph00000001", owner=uid), "주인이 됐는데 삭제가 안 된다"
+        print("orphan claim ok")
+    finally:
+        with db:
+            db.execute("DELETE FROM sources WHERE id='orph00000001'")
+            for rid in real_orphans:
+                db.execute("UPDATE sources SET owner=NULL WHERE id=?", (rid,))
+        corpus._reset_index()
+
+
 def test_deleted_source_keeps_its_name_for_past_citations():
     """소스를 지워도 과거 답변의 인용은 '권한이 없어요'가 아니라 툼스톤을 본다.
 
@@ -324,5 +366,6 @@ if __name__ == "__main__":
     test_empty_selection_is_not_everything()
     test_processing_sources_are_not_used_as_evidence()
     test_context_budget_blocks_before_the_api_does()
+    test_orphan_upload_gets_an_owner()
     test_deleted_source_keeps_its_name_for_past_citations()
     print("all source self-checks passed")

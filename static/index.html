@@ -1553,7 +1553,9 @@ function renderSources(){
       (st === 'processing' ? `<span class="sproc">처리 중</span>` : '') +
       (st === 'error' ? `<span class="serr" title="${esc(s.status_msg || '')}">실패</span>` : '') +
       (s.est_tokens ? `<span class="stok">${Math.round(s.est_tokens/1000)}k</span>` : '') +
-      `<span class="sbadge">${s.mine ? '내 업로드' : '공용'}</span>` +
+      // '내 업로드' 배지는 빼고 ✎🗑의 존재로 대신한다. 둘 다 넣으면 300px 레일에서
+      // 제목이 "a.."로 뭉개진다 — 같은 정보를 두 번 말하려고 이름을 지웠던 셈이다.
+      (s.mine ? '' : `<span class="sbadge">공용</span>`) +
       // 공용 논문은 남들도 보는 것이라 이름 변경·삭제 버튼 자체를 주지 않는다
       (s.mine ? `<span class="srcact"><span class="ren" title="이름 바꾸기">✎</span>`+
                 `<span class="del" title="삭제">🗑</span></span>` : ''));

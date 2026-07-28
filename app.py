@@ -456,6 +456,9 @@ async def get_corpus(x_device_id: str = Header(None)):
     """The sources this user may read: shared papers + their own uploads.
     Order = registry order (stable), so the UI list doesn't reshuffle."""
     uid = learner(x_device_id)
+    claimed = corpus.claim_orphans(uid)   # v2 이전 업로드는 주인이 없어 아무도 못 지웠다
+    if claimed:
+        obs.log_line(event="orphan_sources_claimed", user_id=uid, n=claimed)
     vis = corpus.ensure_estimates(corpus.visible_corpus(uid))
     return {"sources": [{"id": e["id"], "title": e["title"], "owner": e.get("owner"),
                          "mine": e.get("owner") == uid, "added_at": e.get("added_at"),

@@ -320,6 +320,33 @@ def set_status(sid: str, status: str, msg: str | None = None) -> None:
         db.execute("UPDATE sources SET status=?, status_msg=? WHERE id=?", (status, msg, sid))
 
 
+def claim_orphans(user_id: str) -> int:
+    """주인 없는 업로드를 이 사용자에게 귀속시킨다. 돌려주는 건 귀속된 건수.
+
+    v2에서 소유자 격리를 넣기 전에 올라온 PDF는 owner=NULL로 굳었다. 그 값은 "공용
+    시드"와 같은 값이라, 그 논문은 **모든 사람** 목록에 '공용' 배지로 뜨고 어느
+    계정에서도 이름 변경·삭제 버튼이 안 그려졌다. 올린 사람조차 지울 수 없었다.
+
+    시드와 업로드는 경로로 갈린다 — 시드는 papers/, 업로드는 uploads/. 그래서 플래그
+    열을 새로 만들지 않고, 목록을 여는 첫 사용자가 uploads/ 아래의 주인 없는 항목을
+    가져간다. 개인 인스턴스에서 "첫 로그인 계정"은 곧 올린 사람이다.
+
+    ponytail: 여러 사람이 쓰는 서버라면 이건 선착순이라 틀릴 수 있다. 그때는 업로드
+    시점 로그로 소유자를 복원하고 이 함수를 지워라 — 새로 생기는 데이터는 항상
+    owner가 채워지므로, 이 함수의 대상은 시간이 지나도 늘지 않는다.
+    """
+    if not user_id:
+        return 0
+    db = connect()
+    with db:
+        cur = db.execute(
+            "UPDATE sources SET owner = ? WHERE owner IS NULL AND path NOT LIKE 'papers/%'",
+            (user_id,))
+    if cur.rowcount:
+        _reset_index()
+    return cur.rowcount
+
+
 def tombstone(sid: str, user_id: str | None = None) -> dict | None:
     """삭제된 소스의 남은 정보 (제목·삭제 시각), 볼 수 있는 사람에게만.
 
