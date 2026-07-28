@@ -268,6 +268,36 @@ def test_context_budget_blocks_before_the_api_does():
     print(f"context budget ok: {total:,} tokens across {len(reg)} sources")
 
 
+def test_filename_titles_become_readable():
+    """제목을 비우고 올리면 파일명이 제목이 된다. 그 형태만 다듬는다.
+
+    목록은 제목을 한 줄로 자르고 답변 위 출처 줄은 전문을 보여주기 때문에,
+    `a-review-of-...-techniques.pdf` 같은 제목은 두 곳이 아예 다른 문자열로 보였다.
+    """
+    assert corpus.pretty_title("a-review-of-the-grain-boundary.pdf") == \
+        "A review of the grain boundary"
+    assert corpus.pretty_title("my_paper_v2.PDF") == "My paper v2"
+    # 사람이 쓴 제목(공백이 있다)은 절대 건드리지 않는다
+    for kept in ["Review: Deep Learning in Electron Microscopy (Ede 2021)",
+                 "한글 제목 그대로", "A-B test 결과"]:
+        assert corpus.pretty_title(kept) == kept, kept
+    assert corpus.pretty_title("") == ""
+    assert corpus.pretty_title("  ") == ""
+
+    # 등록 경로에서도 적용된다
+    e = None
+    try:
+        e = corpus.add_pdf("uploads/pretty/some-long-file-name.pdf",
+                           "some-long-file-name.pdf", owner="prettyuser")
+        assert e["title"] == "Some long file name", e
+    finally:
+        if e:
+            db = corpus.connect()
+            with db:
+                db.execute("DELETE FROM sources WHERE id=?", (e["id"],))
+    print("pretty titles ok")
+
+
 def test_orphan_upload_gets_an_owner():
     """v2 이전 업로드(owner=NULL)는 '공용'으로 굳어 아무도 못 지웠다. 이제 귀속된다.
 
@@ -369,6 +399,7 @@ if __name__ == "__main__":
     test_empty_selection_is_not_everything()
     test_processing_sources_are_not_used_as_evidence()
     test_context_budget_blocks_before_the_api_does()
+    test_filename_titles_become_readable()
     test_orphan_upload_gets_an_owner()
     test_deleted_source_keeps_its_name_for_past_citations()
     print("all source self-checks passed")

@@ -227,6 +227,10 @@
   .srcsortmenu button[aria-checked="true"]::before { content: '✓'; margin-right: 6px; }
   .srcsortmenu button[aria-checked="false"]::before { content: ''; margin-right: 15px; }
   .srcitem.pending { opacity: .6; }
+  .srcname { cursor: pointer; }
+  .srcname:hover { color: var(--on); text-decoration: underline; }
+  .srcitem.flash { animation: srcflash 1.4s ease-out; }
+  @keyframes srcflash { 0%, 40% { border-color: var(--on); background: rgba(255,255,255,.10); } 100% { } }
   .srcitem.failed { border-color: rgba(255,90,90,.45); }
   .serr { flex-shrink: 0; font-size: 9px; text-transform: uppercase; letter-spacing: .7px; color: var(--danger); border: 1px solid rgba(255,90,90,.45); border-radius: var(--radius-pill); padding: 3px 8px; }
   /* 제목은 nowrap+ellipsis라 ::after로 붙이면 잘려서 안 보인다 — 독립 배지로 둔다 */
@@ -722,6 +726,8 @@ function newBotBubble(){
                                    Object.keys(cites).sort((a,b)=>a-b).map(k => cites[k]));
   // C-b: click a source row to expand its cited passage; click an inline [n] to jump+expand.
   srcBox.onclick = e => {
+    const name = e.target.closest('.srcname');
+    if(name && name.dataset.sid){ e.stopPropagation(); locateSource(name.dataset.sid); return; }
     const open = e.target.closest('.srcopen');
     if(open){
       e.stopPropagation();
@@ -776,7 +782,8 @@ function newBotBubble(){
       const row = document.createElement('div');
       row.className = 'srcrow'; row.dataset.n = n;
       const passage = (c.cited_text||'').trim();
-      row.innerHTML = `<div class="srchead"><span>[${n}] ${esc(`${c.title||''} ${page}`.trim())}</span>`+
+      row.innerHTML = `<div class="srchead"><span class="srcname"${c.source_id?` data-sid="${esc(c.source_id)}" title="목록에서 이 논문 찾기"`:''}>`+
+        `[${n}] ${esc(`${c.title||''} ${page}`.trim())}</span>`+
         (c.source_id?`<span class="srcopen">원문 쪽 열기</span>`:'')+
         (passage?`<span class="srctoggle">구절 보기</span>`:'')+`</div>`+
         (passage?`<div class="passage">“${esc(passage)}”</div>`:'');
@@ -1481,6 +1488,33 @@ async function sourcesReady(){
   return true;
 }
 
+// 답변 위 출처 줄의 제목을 누르면 목록에서 같은 논문을 찾아준다.
+// 목록은 제목을 한 줄로 잘라 보여주고 출처 줄은 전문을 보여주기 때문에, 둘이
+// 같은 논문이라는 걸 화면만 봐서는 확인할 방법이 없었다.
+let SRC_LOCATE = null;   // 다음 렌더에서 강조할 소스 id
+function locateSource(sid){
+  if(!SOURCES.some(s => s.id === sid)){ toast('그 논문은 지금 목록에 없어요'); return; }
+  SRC_LOCATE = sid;
+  // 좁은 화면에서는 탭 전환이 목록을 다시 그린다. 여기서 클래스를 붙이면 그 렌더가
+  // 지워버리므로, 강조는 renderSources가 붙인다 (넓은 화면에서는 즉시 다시 그린다).
+  navigate('sources');
+  renderSources();
+}
+
+// renderSources 끝에서 호출 — SRC_LOCATE가 있으면 그 행으로 스크롤하고 한 번 번쩍인다
+let locateT = null;
+function applyLocate(){
+  if(!SRC_LOCATE) return;
+  const row = document.querySelector(`.srcitem[data-id="${CSS.escape(SRC_LOCATE)}"]`);
+  if(!row) return;
+  row.scrollIntoView({block:'center', behavior:'smooth'});
+  row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash');
+  // 탭으로 전환되는 좁은 화면에서는 /corpus 응답이 도착해 목록을 한 번 더 그린다.
+  // 여기서 바로 지우면 그 두 번째 렌더가 강조를 지운 채 끝난다 — 잠깐 살려둔다.
+  clearTimeout(locateT);
+  locateT = setTimeout(() => { SRC_LOCATE = null; }, 800);
+}
+
 async function loadSources(){
   const body = document.getElementById('sourcesbody');
   const prev = new Set(SOURCES.map(s => s.id));
@@ -1568,6 +1602,7 @@ function renderSources(){
   sortedSources().forEach(s => {
     const st = s.status || 'ready';
     const row = document.createElement('div');
+    row.dataset.id = s.id;
     row.className = 'srcitem' + (on.has(s.id) ? '' : ' off') +
                     (st === 'processing' ? ' pending' : '') + (st === 'error' ? ' failed' : '');
     row.dataset.id = s.id;
@@ -1595,6 +1630,7 @@ function renderSources(){
     }
     body.appendChild(row);
   });
+  applyLocate();
 }
 
 function onSourceToggle(){
@@ -1734,7 +1770,8 @@ async function openNotes(){
       // 저장할 때 인용 배열을 통째로 갖고 왔으므로 노트도 근거를 그대로 유지한다.
       card.innerHTML = `<div class="ntext">${citedHtml(nt.text || '', cites)}</div>` +
         (cites.length ? `<div class="ncites">${cites.map((c, i) =>
-            `<div class="ncite" data-i="${i}">[${i+1}] ${esc(`${c.title||''} ${c.start_page?`p.${c.start_page}`:''}`.trim())}`
+            `<div class="ncite" data-i="${i}"><span class="srcname"${c.source_id?` data-sid="${esc(c.source_id)}" title="목록에서 이 논문 찾기"`:''}>`
+            + `[${i+1}] ${esc(`${c.title||''} ${c.start_page?`p.${c.start_page}`:''}`.trim())}</span>`
             + (c.source_id ? `<span class="srcopen">원문 쪽 열기</span>` : '') + `</div>`).join('')}</div>` : '') +
         (meta || from ? `<div class="nmeta">${meta}${meta && from ? ' · ' : ''}${from}</div>` : '');
       const link = card.querySelector('.nconv');

@@ -97,6 +97,7 @@ def connect(db_path: str | None = None):
     db.commit()
     _db = db
     _migrate_from_json()
+    _backfill_pretty_titles()
     return _db
 
 
@@ -182,6 +183,25 @@ def _migrate_from_json() -> int:
     return n
 
 
+def _backfill_pretty_titles() -> int:
+    """이미 들어와 있는 파일명 제목을 한 번만 다듬는다.
+
+    새로 등록되는 건 add_pdf가 처리하지만, 기존 행은 그대로라 목록과 출처 줄이
+    계속 다른 모양으로 남는다. 원장에 기록해 딱 한 번만 돈다.
+    """
+    import migrations
+    if not migrations.claim(_db, "pretty_filename_titles"):
+        return 0
+    n = 0
+    for r in _db.execute("SELECT id, title FROM sources").fetchall():
+        nice = pretty_title(r["title"])
+        if nice != r["title"]:
+            _db.execute("UPDATE sources SET title=? WHERE id=?", (nice, r["id"]))
+            n += 1
+    _db.commit()
+    return n
+
+
 def load_corpus() -> list[dict]:
     """The FULL registry as [{"id","path","title","owner","sha","added_at"}].
 
@@ -209,6 +229,25 @@ def content_hash(path: str) -> str:
         return ""
 
 
+def pretty_title(title: str) -> str:
+    """파일명이 그대로 제목이 된 경우만 사람이 읽는 형태로 바꾼다.
+
+    업로드 창의 제목을 비우면 파일명이 제목이 된다. 그러면 목록에는
+    `a-review-of-the-grain-bou…`로 잘려 나오고 답변 위 출처 줄에는 119자 전문이
+    나와서, 둘이 같은 논문인지 화면만 봐서는 알 수 없었다. 확장자와 하이픈만
+    걷어내도 두 곳이 같은 문장으로 시작한다.
+
+    사람이 직접 쓴 제목은 건드리지 않는다 — 공백이 있으면 파일명이 아니다.
+    """
+    t = (title or "").strip()
+    if not t or " " in t:
+        return t
+    t = re.sub(r"\.(pdf|PDF)$", "", t)
+    t = re.sub(r"[-_]+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t)
+    return t[:1].upper() + t[1:] if t else title
+
+
 def add_pdf(path: str, title: str, owner: str | None = None,
             status: str = "ready") -> dict:
     """Register an entry and return it (or the existing one). Offline/pure — no upload.
@@ -227,6 +266,7 @@ def add_pdf(path: str, title: str, owner: str | None = None,
     경로 유일성은 어떤 경우에도 깨지지 않는다.
     """
     db = connect()
+    title = pretty_title(title)
     sha = content_hash(path)
     hit = db.execute("SELECT * FROM sources WHERE path = ?", (path,)).fetchone()
     if hit and hit["deleted_at"] is None:
@@ -298,7 +338,7 @@ def remove(sid: str, owner: str) -> dict | None:
 def rename(sid: str, title: str, owner: str) -> dict | None:
     """Retitle an entry the caller OWNS. The title is what the model cites, so this
     changes how the source is named in future answers (past answers keep the old one)."""
-    title = (title or "").strip()
+    title = pretty_title(title)
     if not title or not owner:
         return None
     db = connect()
