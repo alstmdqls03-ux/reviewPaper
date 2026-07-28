@@ -1,41 +1,44 @@
 # 데이터 저장소 설계
 
-작성 2026-07-28 (커밋 `b2e4f0f` 기준). 이전 상태와 무엇이 왜 바뀌었는지까지 적는다.
+작성 2026-07-28 (커밋 `bfa5ad6` 기준). 이전 상태와 무엇이 왜 바뀌었는지까지 적는다.
 
 ## 1. 전체 그림
 
 ```
-app.db  ─ 신원 · 대화 · 소스 (관계형 데이터 전부)
+app.db  ─ 전부 한 파일 (신원 · 대화 · 소스 · 학습 진척)
 ├─ users(id PK, display_name, created_at)
 ├─ devices(device_id PK, user_id, linked_at)                    idx(user_id, linked_at)
 ├─ conversations(id PK, user_id, title, created_at, updated_at, deleted)
 │                                                idx(user_id, deleted, updated_at DESC, id)
 ├─ messages(id PK, conv_id, role, content, created_at, meta)    idx(conv_id, created_at, id)
 ├─ sources(id PK, path UNIQUE, title, owner, sha, added_at)     idx(owner) idx(sha)
-└─ conversation_sources(conv_id, source_id) PK(둘)
-      ├─ FK conv_id   → conversations(id) ON DELETE CASCADE
-      └─ FK source_id → sources(id)       ON DELETE CASCADE
-
-mastery.db ─ 학습 진척
-├─ mastery(device_id, concept_id, score, ease, interval, reps, last_reviewed) PK(둘)
-├─ notes(id PK, device_id, text, source, concept_id, created_at)   idx(device_id, created_at)
-└─ quiz_attempts(id PK, device_id, concept_id, correct, created_at) idx(device_id, created_at)
+├─ conversation_sources(conv_id, source_id) PK(둘)
+│     ├─ FK conv_id   → conversations(id) ON DELETE CASCADE
+│     └─ FK source_id → sources(id)       ON DELETE CASCADE
+├─ mastery(user_id, concept_id, score, ease, interval, reps, last_reviewed) PK(둘)
+│     └─ FK user_id → users(id) ON DELETE CASCADE
+├─ notes(id PK, user_id, text, source, concept_id, created_at, conv_id)  idx(user_id, created_at)
+│     ├─ FK user_id → users(id)         ON DELETE CASCADE
+│     └─ FK conv_id → conversations(id) ON DELETE SET NULL   ← 노트는 대화보다 오래 산다
+├─ quiz_attempts(id PK, user_id, concept_id, correct, created_at)  idx(user_id, created_at)
+│     └─ FK user_id → users(id) ON DELETE CASCADE
+└─ schema_migrations(name PK, applied_at)   1회성 데이터 이관 원장
 
 DB 밖
 ├─ uploads/<owner>/*.pdf   업로드 원본
 ├─ text_cache/*.json       pypdf 추출 텍스트 (뷰어 + BM25 공용)
 ├─ file_cache.json         path → Anthropic Files API file_id
-├─ graph.json              개념 그래프 (전역 1개, 프로세스 기동 시 1회 로드)
+├─ graph.json              개념 그래프 (전역 1개, 파일 변경 감지해 자동 재적재)
 ├─ corpus.json             ⚠️ 이관 원본. 더 이상 아무도 안 읽는다 (백업으로만 보관)
+├─ mastery.db              ⚠️ 이관 원본. 더 이상 아무도 안 읽는다 (백업으로만 보관)
 └─ 프로세스 메모리          SessionStore — 라이브 세션, TTL 30분, 재시작하면 소멸
 ```
 
-## 2. 두 파일로 나뉜 이유 (그리고 그게 옳지 않은 이유)
+## 2. 두 파일로 나뉘어 있던 이유 (2026-07-28 병합 완료)
 
 `mastery.db`가 W2에서 먼저 생겼고 `app.db`가 나중에 프로덕션 레이어로 붙었다.
-**도메인 경계가 아니라 개발 순서 경계다.** 증거: `analytics.py`는 두 파일을 다 열어서
-조인한다(`Analytics(mastery_db=..., app_db=...)`). 합칠 만한 이유는 충분하지만,
-합치는 것 자체가 마이그레이션이라 지금은 남겨뒀다. → 로드맵 Q1.
+**도메인 경계가 아니라 개발 순서 경계였다.** 그 결과 진척과 계정 사이에 FK를 걸 수
+없었고 `analytics.py`는 두 파일을 열어 손으로 조인했다. 지금은 한 파일이고 FK가 있다.
 
 ## 3. 세션은 2겹이고, 라이브 쪽에는 DB가 없다
 
@@ -93,28 +96,60 @@ DB에서 메시지를 읽어 메모리를 재수화하고, 턴 수·다룬 개�
 - `PRAGMA foreign_keys = ON`은 **연결마다** 켜야 한다(DB 속성이 아니다). 연결을 만드는
   세 곳(`history._connect`, `corpus.connect`)에 넣었다.
 
+### (d) mastery.db → app.db 병합 + `device_id` → `user_id` (`4d99c75`)
+컬럼 이름이 거짓말이었다. 값은 늘 계정 id였는데(`learner()`가 기기→계정을 먼저 푼다)
+이름은 기기라고 말했고, accounts 레이어 이전에 쓰인 34개 행은 **실제로** 기기 id를 키로
+쓰고 있어서 그 진척이 계정으로 안 따라왔다.
+
+이관 결과: `{'rows': 91, 'folded': 34, 'orphan_users': 1, 'collisions': 10}`
+**유실·약화된 (학습자, 개념) 0건** — 원본의 모든 쌍이 귀속 계정 아래 같거나 높은 점수로 존재.
+충돌 시 규칙은 `merge_learner`와 같다(점수 높은 쪽). 귀속처 불명 1건은 그 id로 계정을
+만들어 보존했다 — 모른다고 학습 기록을 말없이 버리지 않는다.
+
+FK가 자체검사를 한 번 깨뜨렸다: 계정을 안 만들고 진척부터 넣고 있었다. 실제 코드는 늘
+`ACCOUNTS.resolve`를 먼저 부르므로, **테스트가 현실을 모델링하지 않고 있던 것**이다.
+
+### (e) 노트에 대화 스코프 (`b189022`)
+`notes.conv_id → conversations(id) ON DELETE SET NULL`. CASCADE가 아닌 이유: 노트는
+대화보다 오래 사는 산출물이다. 대화를 지웠다고 정리해둔 노트가 사라지면 안 된다.
+`list_notes`가 제목을 조인해 카드에 "💬 <대화 제목>"을 띄우고, 누르면 그 대화로 돌아간다.
+
+### (f) 그래프 자동 재적재 (`24504b3`)
+`corpus.graph_data()`가 `(mtime, size)` 변화를 보고 다시 읽는다. 전에는 `app.py`가
+import 시점에 1회 로드해서, 업로드가 그래프를 다시 써도 재시작 전까지 옛 노드를 썼다.
+실측: 프로세스를 띄운 채 노드 추가 → 18→19 감지.
+
+### (g) 이관 완료 판정을 원장으로 (`bfa5ad6`)
+"대상이 비었으면 아직 이관 안 함"은 **'이관 전'과 '사용자가 지운 뒤'를 구분하지 못한다.**
+실측으로 재현: 83행 → 전부 삭제 → 재기동 **83행**(지운 진척이 부활).
+`schema_migrations` 원장 도입 후: 재기동 0행.
+
 ## 5. 남아 있는 문제
 
-1. **`mastery.device_id`가 두 종류의 id를 섞어 담는다.** 실측: 19개 키 중 10개는
-   `users.id`, 8개는 `devices.device_id`, 1개는 어디에도 없는 값. accounts 레이어
-   이전에 쓰인 행들이라 **개념 진척 약 30건이 계정으로 안 따라온다.** `merge_learner`는
-   복원 코드를 쓸 때만 돌지 이 행들을 백필하지 않는다. → 백필 정책 결정 필요.
-2. **`mastery.db`의 세 테이블에 FK가 없다.** `app.db`와 다른 파일이라 FK를 걸 수 없다.
-   두 파일을 합치는 것이 선행.
-3. **노트에 대화 스코프가 없다.** `notes.device_id`만 있고 `conv_id`가 없어서, 여러
-   대화에서 저장한 노트가 한 목록에 뒤섞인다 (갭 분석 G7). → 로드맵 Q2.
-4. **`graph.json`은 여전히 파일이고 프로세스 기동 시 1회 로드다.** 업로드가 그래프를
-   다시 써도 `app.NODES`는 재시작 전까지 옛 값이다 (갭 분석 G19).
-5. **마이그레이션 프레임워크가 없다.** `PRAGMA table_info` 확인 후 조건부 `ALTER`,
-   `CREATE IF NOT EXISTS`로 버틴다. 지금 규모에선 충분하지만 컬럼 의미가 바뀌는
-   변경은 감당 못 한다.
+1. **한 프로세스·한 워커를 넘지 못한다.** `SessionStore`가 인메모리이고 SQLite 연결이
+   단일 연결이다. 워커를 늘리면 세션이 절반씩 사라진다. → 세션을 Redis로, DB를 Postgres로.
+   동시 사용자 50명을 넘길 때 필요하다 — 그 전에는 하지 마라.
+2. **퀴즈 정답이 DB에 없다.** 재시작하면 채점 중이던 퀴즈가 404다 (§3).
+3. **노트가 인용을 서식째 보존하지 않는다.** 첫 인용의 제목 문자열 하나만 저장한다.
+   노트→소스 변환도 없다. 학습 루프의 마지막 칸 — 로드맵 Q2.
+4. **개념 그래프는 여전히 전역 1개다.** 내가 올린 PDF는 그래프에 안 들어온다
+   (`regenerate_graph`가 `shared_papers()`만 쓴다). 사용자별 그래프는 `graph.json`
+   단일 파일 구조를 바꿔야 한다.
+5. **`ALTER TABLE`로 붙인 컬럼에는 FK가 없다.** SQLite의 `ALTER`가 FK 절을 못 받는다.
+   `notes.conv_id`는 새로 만든 DB에만 FK가 있고, 이관된 옛 DB에는 컬럼만 있다.
+   전부 맞추려면 테이블 재작성(rename→create→copy→drop)이 필요하다.
 
 ## 6. 마이그레이션 방식
 
 전부 **기동 시 자동, 별도 스텝 없음**:
 - 테이블·인덱스: `CREATE ... IF NOT EXISTS`
 - 컬럼 추가: `PRAGMA table_info` 확인 후 `ALTER TABLE`  (`messages.meta`가 선례)
-- 데이터 이관: 대상 테이블이 비었을 때만 1회 (`corpus._migrate_from_json`)
+- 데이터 이관: `migrations.claim(db, name)` 원장으로 1회 판정 (비었는지로 판정하지 않는다)
 
-되돌리려면 커밋을 revert하고 `app.db`의 `sources`/`conversation_sources`를 drop하면
-`corpus.json`이 그대로 남아 있어 이전 코드가 다시 읽는다.
+**프레임워크는 안 만들었다.** 스키마 변경은 위 둘로 충분하고(멱등), Alembic은 이 앱에
+없는 문제(브랜치·다운그레이드·자동 diff)를 풀면서 의존성을 늘린다. 컬럼 *의미*가 바뀌는
+변경이 나오면 그때 다시 판단한다.
+
+되돌리려면 커밋을 revert하고 `app.db`에서 새 테이블을 drop한 뒤
+`schema_migrations`의 해당 행을 지운다. 원본 `corpus.json`과 `mastery.db`는
+지우지 않고 남겨뒀으므로 이전 코드가 그대로 다시 읽는다.
