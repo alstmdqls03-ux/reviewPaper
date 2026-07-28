@@ -231,9 +231,17 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                 sess.turns += 1
                 sess.covered_concepts |= set(match_concepts(m["content"], NODES))
 
+    # 이 대화의 소스 묶음을 서버에 붙인다 (= 노트북). 클라이언트가 선택을 보내면 그걸
+    # 저장하고, 안 보내면 저장돼 있던 것을 쓴다 — 그래야 다른 기기에서 열어도 같은 소스다.
+    sources = body.sources
+    if sources is None:
+        sources = HIST.get_sources(conv_id)
+    else:
+        HIST.set_sources(conv_id, sources)
+
     try:
         doc_blocks, used_titles = _doc_blocks_for(message, citations=True, cache_last=True,
-                                                  sources=body.sources, user_id=user_id)
+                                                  sources=sources, user_id=user_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     # Citations name a document by title; the viewer needs its source id to fetch pages.
@@ -404,8 +412,11 @@ async def conversations(q: str = "", x_device_id: str = Header(None)):
 @app.get("/conversations/{conv_id}")
 async def conversation_messages(conv_id: str):
     # title travels with the messages so a deep link (/#/chat/{id}) can label the header
-    # without first loading the whole conversation list.
-    return {"messages": HIST.get_messages(conv_id), "title": HIST.get_title(conv_id)}
+    # without first loading the whole conversation list. sources travels too, so opening
+    # a conversation restores its source checkboxes — on any device, not just the one
+    # that made the selection.
+    return {"messages": HIST.get_messages(conv_id), "title": HIST.get_title(conv_id),
+            "sources": HIST.get_sources(conv_id)}
 
 
 @app.delete("/conversations/{conv_id}")

@@ -9,6 +9,8 @@ import sqlite3
 import time
 import uuid
 
+import corpus  # sources 테이블 DDL — conversation_sources가 FK로 참조한다
+
 
 def _snippet(content, query, width=90):
     """매치 주변만 잘라낸다. 카드 한 줄에 들어갈 만큼만 — 앞뒤는 …로 표시."""
@@ -28,12 +30,14 @@ def _connect(db_path):
     # one worker. Upgrade path: per-request connection or a small pool for multi-worker.
     db = sqlite3.connect(db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA foreign_keys = ON")   # 연결마다 켜야 한다 (DB 속성이 아니다)
     return db
 
 
 class History:
     def __init__(self, db_path="app.db"):
         self.db = _connect(db_path)
+        self.db.executescript(corpus.SOURCES_DDL)   # FK 대상이 먼저 있어야 INSERT가 산다
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS conversations(
@@ -52,6 +56,15 @@ class History:
                 ON messages(conv_id, created_at, id);
             CREATE INDEX IF NOT EXISTS idx_conversations_user
                 ON conversations(user_id, deleted, updated_at DESC, id);
+            -- 대화가 어떤 소스 묶음 위에 서 있는지 = NotebookLM의 노트북.
+            -- 행이 없으면 "전부 선택"(선택을 손댄 적 없음)이고, 0편을 고른 상태와 다르다.
+            -- FK ON DELETE CASCADE: 소스를 지우면 그 소스를 가리키던 선택도 같이 사라진다.
+            -- 클라이언트 localStorage로만 갖고 있을 때는 지운 논문의 id가 영원히 남았다.
+            CREATE TABLE IF NOT EXISTS conversation_sources(
+                conv_id   TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                source_id TEXT NOT NULL REFERENCES sources(id)       ON DELETE CASCADE,
+                PRIMARY KEY(conv_id, source_id)
+            );
             """
         )
         # meta = JSON sidecar per message (citations, used sources). Added after the
@@ -175,6 +188,33 @@ class History:
                         "created_at": r["created_at"], "meta": meta})
         return out
 
+    # ---- 대화에 붙은 소스 묶음 (= 노트북) --------------------------------
+
+    def get_sources(self, conv_id):
+        """이 대화가 근거로 삼는 source_id 목록. None이면 "선택을 손댄 적 없음"(=전부).
+
+        빈 리스트([])와 None은 다르다: []는 "0편을 골랐다"는 뜻이고 그건 거절 대상이다
+        (app._pick_sources). 행이 아예 없을 때만 None을 돌려준다.
+        """
+        rows = self.db.execute(
+            "SELECT source_id FROM conversation_sources WHERE conv_id=? ORDER BY rowid",
+            (conv_id,)).fetchall()
+        return [r["source_id"] for r in rows] if rows else None
+
+    def set_sources(self, conv_id, source_ids):
+        """이 대화의 소스 묶음을 통째로 교체. source_ids=None이면 기록을 지운다(=전부).
+
+        sources에 없는 id는 FK가 거부하므로, 지워진 논문 id가 선택에 남는 일이 없다.
+        존재하지 않는 id는 조용히 무시한다 — 소스 하나 지웠다고 대화가 막히면 안 된다.
+        """
+        with self.db:
+            self.db.execute("DELETE FROM conversation_sources WHERE conv_id=?", (conv_id,))
+            if source_ids:
+                self.db.executemany(
+                    """INSERT OR IGNORE INTO conversation_sources(conv_id, source_id)
+                       SELECT ?, id FROM sources WHERE id = ?""",
+                    [(conv_id, sid) for sid in source_ids])
+
     def get_title(self, conv_id):
         """The conversation's title, or "" if it has none / doesn't exist."""
         row = self.db.execute(
@@ -265,6 +305,40 @@ if __name__ == "__main__":
     assert "표적단어" in sn and len(sn) < 200, (len(sn), sn[:60])
     assert sn.startswith("…") and sn.endswith("…"), sn
     h.delete(long_conv); h.delete(c2)
+
+    # ---- 대화별 소스 묶음 + FK ----
+    s1, s2 = "src-aaa", "src-bbb"
+    h.db.execute("INSERT INTO sources(id,path,title,owner) VALUES(?,?,?,NULL)", (s1, "p/a.pdf", "논문 A"))
+    h.db.execute("INSERT INTO sources(id,path,title,owner) VALUES(?,?,?,NULL)", (s2, "p/b.pdf", "논문 B"))
+    h.db.commit()
+
+    assert h.get_sources(conv) is None, "손댄 적 없으면 None(=전부)이어야 한다"
+    h.set_sources(conv, [s1, s2])
+    assert h.get_sources(conv) == [s1, s2]
+    h.set_sources(conv, [s1])                      # 통째로 교체
+    assert h.get_sources(conv) == [s1]
+    h.set_sources(conv, None)                      # 기록 삭제 -> 다시 "전부"
+    assert h.get_sources(conv) is None
+
+    # 존재하지 않는 소스 id는 조용히 무시된다 (지운 논문 때문에 대화가 막히면 안 된다)
+    h.set_sources(conv, [s1, "src-없음"])
+    assert h.get_sources(conv) == [s1], h.get_sources(conv)
+
+    # FK CASCADE: 소스를 지우면 그 소스를 가리키던 선택도 사라진다.
+    # localStorage로만 갖고 있을 때는 지운 논문의 id가 영원히 남아 있었다.
+    h.set_sources(conv, [s1, s2])
+    with h.db:
+        h.db.execute("DELETE FROM sources WHERE id=?", (s2,))
+    assert h.get_sources(conv) == [s1], f"소스 삭제가 선택에 반영되지 않았다: {h.get_sources(conv)}"
+
+    # FK CASCADE: 대화를 하드 삭제하면 그 선택도 사라진다 (고아 행 방지)
+    tmp_conv = h.start_conversation("userA", now=t0 + 30)
+    h.set_sources(tmp_conv, [s1])
+    with h.db:
+        h.db.execute("DELETE FROM conversations WHERE id=?", (tmp_conv,))
+    assert h.db.execute("SELECT COUNT(*) FROM conversation_sources WHERE conv_id=?",
+                        (tmp_conv,)).fetchone()[0] == 0
+    h.set_sources(conv, None)
 
     # isolation: another user sees nothing
     assert h.list_conversations("userB") == []

@@ -34,6 +34,22 @@ _TEXT_CACHE_DIR = Path("text_cache")
 _DB_PATH = "app.db"
 _db = None
 
+# 이 테이블의 주인은 corpus.py다. history.py도 같은 DDL을 실행하는데(자기 연결로),
+# conversation_sources가 sources를 FK로 참조하기 때문이다. CREATE ... IF NOT EXISTS라
+# 누가 먼저 돌든 결과가 같고, 그래서 두 모듈의 초기화 순서를 신경 쓰지 않아도 된다.
+SOURCES_DDL = """
+CREATE TABLE IF NOT EXISTS sources(
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,   -- 같은 경로 두 번 등록 불가를 DB가 보장한다
+    title TEXT NOT NULL,
+    owner TEXT,                  -- NULL = 공용 시드, 그 외 = 올린 사람의 user_id
+    sha TEXT,                    -- 내용 해시: 이름만 바꾼 같은 PDF를 잡는다
+    added_at REAL
+);
+CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner);
+CREATE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha);
+"""
+
 # BM25 knobs — the textbook defaults; fine for page-length docs.
 BM25_K1 = 1.5
 BM25_B = 0.75
@@ -60,20 +76,7 @@ def connect(db_path: str | None = None):
     db = sqlite3.connect(_DB_PATH, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys = ON")     # conversation_sources의 FK가 실제로 강제되게
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS sources(
-            id TEXT PRIMARY KEY,
-            path TEXT NOT NULL UNIQUE,   -- 같은 경로 두 번 등록 불가를 DB가 보장한다
-            title TEXT NOT NULL,
-            owner TEXT,                  -- NULL = 공용 시드, 그 외 = 올린 사람의 user_id
-            sha TEXT,                    -- 내용 해시: 이름만 바꾼 같은 PDF를 잡는다
-            added_at REAL
-        );
-        CREATE INDEX IF NOT EXISTS idx_sources_owner ON sources(owner);
-        CREATE INDEX IF NOT EXISTS idx_sources_sha ON sources(sha);
-        """
-    )
+    db.executescript(SOURCES_DDL)
     db.commit()
     _db = db
     _migrate_from_json()

@@ -1290,9 +1290,11 @@ let SRC_MAX = 0;   // 사용자당 업로드 상한 (서버 설정)
 // 대화 A에서 2편만 고르고 → B에서 다른 걸 고르고 → A로 돌아오면, A의 옛 답변 위에는
 // 2편이 적혀 있는데 왼쪽 레일은 B의 선택을 체크해 보여준다.
 //
-// 저장은 localStorage 한 곳: rp_sources_by_conv = {conversation_id: [source_id,...]}.
-// 서버(conversations 테이블)에 넣으면 기기 간에도 따라오지만 그건 스키마 변경이라
-// 오늘 범위 밖 — 로드맵으로 넘겼다. ponytail: 키 하나로 끝나는 이관을 먼저 한다.
+// 진짜 저장소는 서버의 conversation_sources 테이블이다(FK로 sources를 참조).
+// localStorage는 그 앞의 캐시일 뿐 — 대화를 열면 서버 값으로 덮어쓰고, 대화가 아직
+// 생기기 전(첫 질문 전)의 선택만 로컬에서 임시로 들고 있는다.
+// 그래서 다른 기기에서 같은 대화를 열어도 체크가 같고, 지운 논문의 id는 FK CASCADE로
+// 서버에서 이미 빠져 있다.
 const SEL_KEY = 'rp_sources_by_conv';
 const SEL_LEGACY = 'rp_sources';        // 대화별 이전의 전역 키 (이관용으로만 읽는다)
 
@@ -1317,6 +1319,12 @@ function getSelected(){
 function setSelected(ids){
   const map = _selMap();
   map[selBucket()] = ids;
+  localStorage.setItem(SEL_KEY, JSON.stringify(map));
+}
+// 이 대화의 로컬 선택 기록을 지운다 = "손댄 적 없음"(전부 선택)으로 되돌림.
+function clearSelected(){
+  const map = _selMap();
+  delete map[selBucket()];
   localStorage.setItem(SEL_KEY, JSON.stringify(map));
 }
 // 첫 답변에서 대화 id가 생기면 '새 대화' 버킷을 그 대화로 승격한다.
@@ -1783,6 +1791,9 @@ async function resumeConversation(id, title){
     localStorage.setItem('rp_conv', id);
     localStorage.removeItem('rp_session');
     RENDERED_CONV = id;
+    // 서버가 이 대화의 소스 묶음을 준다 — 로컬 캐시보다 서버가 우선이다.
+    // null이면 "선택을 손댄 적 없음"이라 로컬 값을 지워 전체 선택으로 되돌린다.
+    if(d.sources) setSelected(d.sources); else clearSelected();
     renderSources();          // 이 대화의 소스 선택으로 레일 체크를 바꾼다
     refreshSuggestions();
     setConvTitle(title || d.title);  // 딥링크로 들어오면 목록을 안 거치므로 서버 제목을 쓴다
