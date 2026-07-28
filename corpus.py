@@ -96,7 +96,11 @@ def _migrate_from_json() -> int:
     그 순서가 프롬프트 문서 블록 순서 = 1h 캐시 프리픽스다 (app._doc_blocks_for).
     순서가 흔들리면 캐시가 매 질문 새로 쓰이고 비용이 5배가 된다.
     """
-    if _db.execute("SELECT 1 FROM sources LIMIT 1").fetchone():
+    import migrations
+    # 대상이 비었는지로 판정하면, 사용자가 소스를 전부 지운 다음 기동에 corpus.json이
+    # 통째로 되살아난다. "이관을 했다"와 "데이터가 있다"는 별개의 사실이다.
+    already = _db.execute("SELECT 1 FROM sources LIMIT 1").fetchone() is not None
+    if not migrations.claim(_db, "corpus_json_to_sources", already_done=already):
         return 0
     if _CORPUS.exists():
         try:

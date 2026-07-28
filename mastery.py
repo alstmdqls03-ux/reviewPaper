@@ -110,10 +110,15 @@ class MasteryStore:
                               말없이 버리는 것보다 낫다. 몇 건인지 반환값으로 보고한다
         """
         import os
+
+        import migrations
         if not legacy_path or not os.path.exists(legacy_path):
             return None   # legacy_path=None -> 이관 안 함 (테스트가 진짜 mastery.db를 안 빨아들이게)
-        if self.db.execute("SELECT 1 FROM mastery LIMIT 1").fetchone():
-            return None                                  # 이미 이관됨
+        # "대상이 비었으면 아직 안 함"은 틀린 판정이었다 — 사용자가 진척을 지우면
+        # 다음 기동에 옛 mastery.db가 통째로 되살아난다(실측 확인). 원장으로 판정한다.
+        already = self.db.execute("SELECT 1 FROM mastery LIMIT 1").fetchone() is not None
+        if not migrations.claim(self.db, "mastery_db_to_app_db", already_done=already):
+            return None
         src = sqlite3.connect(legacy_path)
         src.row_factory = sqlite3.Row
         try:
