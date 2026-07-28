@@ -58,9 +58,11 @@ HIST = History()
 ANALYTICS = Analytics()
 METRICS = obs.Metrics()
 RL = RateLimiter(settings.RATE_LIMIT, settings.RATE_WINDOW)
-_GRAPH = json.loads(Path("graph.json").read_text())
-NODES, EDGES = _GRAPH["nodes"], _GRAPH["edges"]
-NODE_BY_ID = {n["id"]: n for n in NODES}
+# 그래프는 corpus.graph_data()가 파일 변경을 감지해 다시 읽는다. 모듈 전역으로
+# 한 번만 읽으면 업로드가 그래프를 다시 써도 재시작 전까지 옛 노드를 쓴다 (G19).
+def NODES():      return corpus.graph_data()["nodes"]
+def EDGES():      return corpus.graph_data()["edges"]
+def NODE_BY_ID(): return corpus.graph_data()["by_id"]
 UPLOADS = Path("uploads")
 _uploaded: list = []
 
@@ -230,7 +232,7 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
         for m in sess.messages:  # restore turn count + covered concepts so quiz gating survives resume
             if m["role"] == "assistant":
                 sess.turns += 1
-                sess.covered_concepts |= set(match_concepts(m["content"], NODES))
+                sess.covered_concepts |= set(match_concepts(m["content"], NODES()))
 
     # 이 대화의 소스 묶음을 서버에 붙인다 (= 노트북). 클라이언트가 선택을 보내면 그걸
     # 저장하고, 안 보내면 저장돼 있던 것을 쓴다 — 그래야 다른 기기에서 열어도 같은 소스다.
@@ -273,7 +275,7 @@ async def chat(body: ChatIn, x_device_id: str = Header(None)):
                         citations.append(payload)
                         yield _sse({"type": "citation", "citation": payload})
                 answer = "".join(parts)
-                concepts = match_concepts(answer, NODES)
+                concepts = match_concepts(answer, NODES())
                 sess.add_user(message)
                 sess.add_assistant(answer, concepts)
                 MASTERY.record_covered(user_id, concepts)
@@ -295,10 +297,10 @@ async def quiz(body: QuizIn, x_device_id: str = Header(None)):
     if not sess.quiz_available:
         raise HTTPException(400, "아직 퀴즈를 낼 만큼 대화하지 않았어요. 조금 더 대화해 주세요.")
     device = learner(x_device_id)
-    covered = [cid for cid in sess.covered_concepts if cid in NODE_BY_ID]
+    covered = [cid for cid in sess.covered_concepts if cid in NODE_BY_ID()]
     order = MASTERY.due_concepts(device, covered)  # spaced repetition: weak/due first
     covered.sort(key=lambda c: order.index(c) if c in order else len(order))
-    infos = [NODE_BY_ID[cid] for cid in covered]
+    infos = [NODE_BY_ID()[cid] for cid in covered]
     # Same source selection as chat. Was: the ENTIRE corpus — 11 papers blows past the
     # 1M context window on a real key, and rewrote the cache prefix every quiz.
     try:
@@ -339,13 +341,13 @@ async def session_reset(body: QuizIn):
 async def get_mastery(x_device_id: str = Header(None)):
     device = learner(x_device_id)
     return {"mastery": MASTERY.get_mastery(device),
-            "next_up": MASTERY.next_up(device, NODES, EDGES)}
+            "next_up": MASTERY.next_up(device, NODES(), EDGES())}
 
 
 @app.get("/dashboard")
 async def dashboard(x_device_id: str = Header(None)):
     """Phase 1 learning dashboard: the 7 metrics from 제안서 §02, MOCK-friendly."""
-    return MASTERY.dashboard(learner(x_device_id), NODES)
+    return MASTERY.dashboard(learner(x_device_id), NODES())
 
 
 @app.post("/mastery/mark")
@@ -475,16 +477,16 @@ async def suggestions(sources: str = "", x_device_id: str = Header(None)):
     except ValueError:
         return {"suggestions": [], "from_sources": 0}  # 고른 소스가 없으면 추천도 없다
     tset = set(titles)
-    hits = [n for n in NODES if tset & set(n.get("sources") or [])] or NODES
+    hits = [n for n in NODES() if tset & set(n.get("sources") or [])] or NODES()
     known = set(MASTERY.get_mastery(uid) or {})
     hits.sort(key=lambda n: n["id"] in known)  # 아직 안 배운 개념 먼저
     out = [f"{n['label'].split(' /')[0]}에 대해 설명해줘" for n in hits[:3]]
     # 두 개념을 잇는 질문 하나 — 이 앱의 목적이 "연결해서 배우기"라서
     ids_in = {n["id"] for n in hits}
-    link = next((e for e in EDGES if e["source"] in ids_in and e["target"] in ids_in
+    link = next((e for e in EDGES() if e["source"] in ids_in and e["target"] in ids_in
                  and e["source"] != e["target"]), None)
     if link:
-        a, b = NODE_BY_ID.get(link["source"]), NODE_BY_ID.get(link["target"])
+        a, b = NODE_BY_ID().get(link["source"]), NODE_BY_ID().get(link["target"])
         if a and b:
             out.append(f"{a['label'].split(' /')[0]}와(과) {b['label'].split(' /')[0]}는 어떻게 연결되나?")
     return {"suggestions": out[:4], "from_sources": len(tset)}
@@ -573,7 +575,7 @@ async def analytics_students(x_admin_token: str = Header(None)):
                "learning_score", "concepts_learned", "streak_days")
     students = []
     for uid in MASTERY.all_learners():
-        d = MASTERY.dashboard(uid, NODES)
+        d = MASTERY.dashboard(uid, NODES())
         acct = ACCOUNTS.get(uid) or {}
         students.append({"user_id": uid, "name": acct.get("display_name") or "익명",
                          **{k: d[k] for k in metrics}, "quiz_attempts": d["quiz_attempts"]})
@@ -581,7 +583,7 @@ async def analytics_students(x_admin_token: str = Header(None)):
     n = len(students)
     averages = {k: round(sum(s[k] for s in students) / n, 1) for k in metrics} if n else {}
     return {"students": students, "class_average": averages, "student_count": n,
-            "total_concepts": len(NODES)}
+            "total_concepts": len(NODES())}
 
 
 @app.get("/healthz")
@@ -597,7 +599,8 @@ def readyz():
 
 @app.get("/graph")
 def graph():
-    return json.loads(Path("graph.json").read_text())
+    g = corpus.graph_data()
+    return {"nodes": g["nodes"], "edges": g["edges"]}
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")  # must be last

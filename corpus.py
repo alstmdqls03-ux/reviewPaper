@@ -348,6 +348,38 @@ def select_documents(query: str, uploaded: list[dict], max_docs: int = MAX_DOCS)
 
 
 # ------------------------------------------------------------ graph regen ---
+_GRAPH_CACHE = {"stamp": None, "nodes": [], "edges": [], "by_id": {}}
+
+
+def graph_data() -> dict:
+    """graph.json, 파일이 바뀌면 자동으로 다시 읽는다.
+
+    예전엔 app.py가 import 시점에 한 번만 읽어서(`NODES = json.loads(...)`),
+    업로드가 regenerate_graph()로 그래프를 다시 써도 프로세스는 재시작 전까지
+    옛 노드 목록을 썼다. 화면의 /graph는 디스크를 다시 읽어 새 노드를 보여주는데
+    답변의 개념 매칭·"다음에 공부할 개념"·추천 질문은 옛 목록을 쓰는 상태가 됐다
+    (docs/benchmark-gap.md G19).
+
+    ponytail: (mtime, size)만 비교한다. stat() 한 번이라 호출당 비용이 무시할 수준이고
+    파일이 안 바뀌면 파싱을 건너뛴다. 한계 — 같은 초에 같은 크기로 덮어쓰면 놓친다.
+    그런 쓰기는 regenerate_graph()뿐이고 그건 수십 초 걸리는 작업이라 실제로는 안 겹친다.
+    """
+    p = Path("graph.json")
+    try:
+        st = p.stat()
+        stamp = (st.st_mtime, st.st_size)
+    except OSError:
+        return _GRAPH_CACHE                      # 파일이 없으면 마지막으로 읽은 것을 유지
+    if _GRAPH_CACHE["stamp"] != stamp:
+        try:
+            g = json.loads(p.read_text())
+        except ValueError:                       # 재생성 도중 반쯤 쓰인 파일을 읽었을 수 있다
+            return _GRAPH_CACHE
+        _GRAPH_CACHE.update(stamp=stamp, nodes=g.get("nodes", []), edges=g.get("edges", []),
+                            by_id={n["id"]: n for n in g.get("nodes", [])})
+    return _GRAPH_CACHE
+
+
 def regenerate_graph_needed(prev_titles, cur_titles) -> bool:
     """True if the set of corpus titles changed — graph.json is stale."""
     return set(prev_titles) != set(cur_titles)

@@ -109,14 +109,11 @@ async def stream_chat(messages: list, system: str):
         })
 
 
-_GRAPH_NODES = None
-
-
 def _nodes():
-    global _GRAPH_NODES
-    if _GRAPH_NODES is None:
-        _GRAPH_NODES = json.loads(Path("graph.json").read_text())["nodes"]
-    return _GRAPH_NODES
+    # corpus가 파일 변경을 감지해 다시 읽는다. 전에는 여기서 따로 캐시해서,
+    # 그래프가 재생성돼도 목 응답은 재시작 전까지 옛 개념만 이름 붙였다.
+    import corpus
+    return corpus.graph_data()["nodes"]
 
 
 async def _mock_stream(messages: list):
