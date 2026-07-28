@@ -1305,7 +1305,58 @@ function closeViewer(){ viewerEl.classList.remove('open'); }
 document.getElementById('vclose').onclick = closeViewer;
 document.getElementById('vprev').onclick = () => { if(VIEW.page > 1){ VIEW.page--; loadViewerPage(); } };
 document.getElementById('vnext').onclick = () => { if(VIEW.page < VIEW.total){ VIEW.page++; loadViewerPage(); } };
-document.addEventListener('keydown', e => { if(e.key === 'Escape' && viewerEl.classList.contains('open')) closeViewer(); });
+// ---- 대화상자 접근성: Esc로 닫기 · 포커스 가두기 · 닫으면 원래 자리로 ----
+// 설계문서(2026-07-24) M1이 스스로 요구해놓고 안 지킨 것. #viewer는 role="dialog"
+// aria-modal="true"를 달고도 트랩·복귀가 없었고, .modal 3종은 role도 Esc도 없어서
+// 논문 추가 모달에서 Esc를 눌러도 아무 일이 없고 Tab을 누르면 포커스가 뒤 로그로
+// 빠져나갔다 (benchmark-gap G18).
+//
+// 열고 닫는 곳이 10군데라 호출부를 하나씩 고치는 대신, 'open' 클래스 변화를
+// MutationObserver로 관찰해 한 곳에서 처리한다 — 새 대화상자를 추가해도 그냥 걸린다.
+const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])';
+function topDialog(){
+  // viewer(z-index 25)가 modal(20)보다 위다 — 겹쳐 있으면 위엣것부터 닫는다
+  if(viewerEl.classList.contains('open')) return viewerEl;
+  return document.querySelector('.modal.open');
+}
+function closeDialog(el){
+  if(el === viewerEl) closeViewer();
+  else el.classList.remove('open');
+}
+let lastFocusOutside = null;
+document.addEventListener('focusin', e => {
+  const d = topDialog();
+  if(!d || !d.contains(e.target)) lastFocusOutside = e.target;
+});
+document.addEventListener('keydown', e => {
+  const d = topDialog();
+  if(!d) return;
+  if(e.key === 'Escape'){ e.preventDefault(); closeDialog(d); return; }
+  if(e.key !== 'Tab') return;
+  const items = [...d.querySelectorAll(FOCUSABLE)].filter(x => x.offsetParent !== null);
+  if(!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  // 가두기: 마지막에서 Tab -> 처음으로, 처음에서 Shift+Tab -> 마지막으로
+  if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+  else if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+  else if(!d.contains(document.activeElement)){ e.preventDefault(); first.focus(); }
+});
+[viewerEl, ...document.querySelectorAll('.modal')].forEach(el => {
+  el.dataset.wasOpen = el.classList.contains('open') ? '1' : '0';
+  new MutationObserver(() => {
+    const open = el.classList.contains('open');
+    if(open === (el.dataset.wasOpen === '1')) return;   // 다른 클래스 변화는 무시
+    el.dataset.wasOpen = open ? '1' : '0';
+    if(open){
+      el.setAttribute('role', 'dialog');
+      el.setAttribute('aria-modal', 'true');
+      const target = el.querySelector(FOCUSABLE);
+      if(target) setTimeout(() => target.focus(), 0);   // 렌더 뒤에 잡아야 남는다
+    } else if(lastFocusOutside && document.body.contains(lastFocusOutside)){
+      lastFocusOutside.focus();                          // 열기 전 있던 자리로 돌려준다
+    }
+  }).observe(el, { attributes: true, attributeFilter: ['class'] });
+});
 
 // ---- 각주 호버 미리보기 ----
 const citePop = document.getElementById('citepop');
