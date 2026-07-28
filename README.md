@@ -80,7 +80,7 @@ static/index.html 채팅·퀴즈·숙련도·노트·업로드·계정·대화�
 eval.py / eval_gold.py   평가 하네스 / 골드셋 게이트
 locustfile.py     동시성·세션격리 부하   test_*.py  pytest
 Dockerfile / docker-compose.yml / Makefile / ci.sh / .github/workflows/ci.yml
-papers/           오픈액세스 arXiv 리뷰 논문 5편
+papers/           시드 리뷰 논문 9편 (출처·라이선스: papers/SOURCES.md)
 ```
 
 모델: `claude-opus-5` (`MODEL` 환경변수로 교체). 논문 합계 47MB > 32MB 요청 한도 → Files API 필수.
