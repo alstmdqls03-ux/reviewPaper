@@ -83,7 +83,7 @@ Dockerfile / docker-compose.yml / Makefile / ci.sh / .github/workflows/ci.yml
 papers/           오픈액세스 arXiv 리뷰 논문 5편
 ```
 
-모델: `claude-opus-4-8`. 논문 합계 47MB > 32MB 요청 한도 → Files API 필수.
+모델: `claude-opus-5` (`MODEL` 환경변수로 교체). 논문 합계 47MB > 32MB 요청 한도 → Files API 필수.
 
 ## 아키텍처 메모
 

@@ -2,7 +2,7 @@
 
 Runs in MOCK mode when MOCK_LLM=1 or no ANTHROPIC_API_KEY is set — canned but
 structurally-real responses so the whole app (sessions, streaming, quiz, load test,
-eval) can be exercised end-to-end without a key. Real mode uses claude-opus-4-8.
+eval) can be exercised end-to-end without a key. Real mode uses settings.MODEL (기본 claude-opus-5).
 """
 import asyncio
 import json

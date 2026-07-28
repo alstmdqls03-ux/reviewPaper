@@ -17,7 +17,7 @@ load_dotenv()
 
 class Settings:
     def __init__(self):
-        self.MODEL = os.getenv("MODEL", "claude-opus-4-8")
+        self.MODEL = os.getenv("MODEL", "claude-opus-5")
         self.SESSION_TTL = int(os.getenv("SESSION_TTL", "1800"))
         self.RATE_LIMIT = int(os.getenv("RATE_LIMIT", "30"))      # requests
         self.RATE_WINDOW = int(os.getenv("RATE_WINDOW", "60"))    # seconds
@@ -64,7 +64,7 @@ if __name__ == "__main__":
                "ANTHROPIC_API_KEY"):
         os.environ.pop(_k, None)
     s = Settings()
-    assert s.MODEL == "claude-opus-4-8"
+    assert s.MODEL == "claude-opus-5"
     assert s.SESSION_TTL == 1800 and s.RATE_LIMIT == 30 and s.RATE_WINDOW == 60
     assert s.MAX_MESSAGE_CHARS == 4000 and s.MAX_UPLOAD_MB == 50 and s.MAX_SOURCES == 50
     assert s.ADMIN_TOKEN == ""
@@ -80,6 +80,19 @@ if __name__ == "__main__":
     import pathlib
     _llm = pathlib.Path("llm.py").read_text()
     assert 'MOCK = settings.MOCK' in _llm, "llm.py re-derives MOCK — the two will drift"
+
+    # 같은 이유로 모델도 출처가 하나여야 한다. 예전엔 papers.py가 자기 상수를 들고
+    # 있어서, MODEL 환경변수가 /healthz와 비용 계산만 바꾸고 실제 호출 모델은 그대로였다.
+    # (OPERATIONS.md의 `MODEL=claude-haiku-4-5` 안내를 따르면 호출은 opus, 청구는 haiku)
+    _papers = pathlib.Path("papers.py").read_text()
+    assert 'MODEL = settings.MODEL' in _papers, "papers.py가 모델을 하드코딩했다 — 청구와 호출이 갈린다"
+    os.environ["MODEL"] = "claude-haiku-4-5"
+    import importlib, config as _cfg, papers as _pap
+    importlib.reload(_cfg); importlib.reload(_pap)
+    assert _pap.MODEL == "claude-haiku-4-5", _pap.MODEL   # 환경변수가 진짜 호출 모델을 바꾼다
+    os.environ.pop("MODEL")
+    importlib.reload(_cfg); importlib.reload(_pap)
+    assert _pap.MODEL == "claude-opus-5", _pap.MODEL
 
     # env override works on re-instantiation
     os.environ["RATE_LIMIT"] = "5"

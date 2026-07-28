@@ -9,7 +9,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 FILES_BETA = "files-api-2025-04-14"
-MODEL = "claude-opus-4-8"  # per claude-api skill default
+
+# 모델의 단일 출처는 config.Settings다. 예전엔 여기에 하드코딩돼 있어서,
+# MODEL 환경변수는 /healthz와 **비용 계산**만 바꾸고 실제 호출 모델은 그대로였다.
+# OPERATIONS.md가 안내하던 `MODEL=claude-haiku-4-5`를 그대로 하면 호출은 opus로
+# 나가고 청구는 haiku로 기록됐다 — 5배 축소 보고. llm.py의 자체검사가 이 등식을 지킨다.
+from config import settings  # noqa: E402
+MODEL = settings.MODEL
 
 # The demo corpus: open-access arXiv review papers on ML/metadata in electron microscopy.
 # Title is what Claude cites in answers — keep it human-readable.

@@ -35,7 +35,8 @@ curl -s localhost:8000/metrics | python -m json.tool
 ```
 
 - **MOCK은 항상 $0** (canned 응답 = 토큰 소비 0, 정직). 실키에서만 non-zero.
-- **모델 선택**으로 비용 조절: `MODEL` 환경변수 (`config.py`). 요율(`obs._RATES`, $/1M): opus-4-8 5/25 · sonnet-5 3/15 · haiku-4-5 1/5. 저비용은 `MODEL=claude-haiku-4-5`.
+- **모델 선택**으로 비용 조절: `MODEL` 환경변수 (`config.py` → `papers.MODEL` → 실제 호출). 요율(`obs._RATES`, $/1M): opus-4-8 5/25 · sonnet-5 3/15 · haiku-4-5 1/5. 저비용은 `MODEL=claude-haiku-4-5`.
+  - 기본값은 `claude-opus-5`인데 **`_RATES`에 단가가 없다.** 그동안 /metrics 금액은 opus-4-8 단가로 추정되며, `unpriced_models`에 그 사실이 찍힌다. 공식 단가를 확인해 `_RATES`에 넣어야 금액이 참이 된다.
 - **캐싱**: 문서 블록 마지막에 프롬프트 캐시 적용(`cache_last=True`) → 반복 질의의 입력 토큰이 캐시read(≈10% 요율)로 청구. `/metrics` 비용에 반영됨.
 - 학생 1인 월 추정: Opus ~7만원 / Haiku ~1.5만원 (사용량 기반 실비).
 
