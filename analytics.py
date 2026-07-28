@@ -39,9 +39,14 @@ def _scalar(db, table, sql, default=0):
 class Analytics:
     KNOWN = 0.7  # mirrors mastery.KNOWN; a device counts as "known" at score >= this
 
-    def __init__(self, mastery_db="mastery.db", app_db="app.db"):
-        self._m = _connect(mastery_db)
+    def __init__(self, app_db="app.db", mastery_db=None):
+        """진척과 계정이 이제 같은 파일에 있다 (2026-07-28 병합).
+
+        _m / _a 두 핸들은 남겨뒀다 — 쿼리를 전부 다시 쓰는 대신 같은 연결을 가리키게
+        했다. mastery_db 인자는 옛 호출부(테스트)를 위한 것이고, 주면 그 파일을 본다.
+        """
         self._a = _connect(app_db)
+        self._m = _connect(mastery_db) if mastery_db else self._a
 
     # ---- cohort concept mastery -----------------------------------------
 
@@ -53,7 +58,7 @@ class Analytics:
             """
             SELECT concept_id,
                    AVG(score)                              AS avg_score,
-                   COUNT(DISTINCT device_id)              AS learners,
+                   COUNT(DISTINCT user_id)                AS learners,
                    SUM(CASE WHEN score >= ? THEN 1 ELSE 0 END) AS known_count
             FROM mastery
             GROUP BY concept_id
@@ -110,7 +115,7 @@ class Analytics:
     def engagement(self):
         """Top-line counts across both dbs; missing tables read as 0."""
         return {
-            "devices": _scalar(self._m, "mastery", "SELECT COUNT(DISTINCT device_id) FROM mastery"),
+            "devices": _scalar(self._m, "mastery", "SELECT COUNT(DISTINCT user_id) FROM mastery"),
             "users": _scalar(self._a, "users", "SELECT COUNT(*) FROM users"),
             "conversations": _scalar(
                 self._a, "conversations",
@@ -141,10 +146,10 @@ if __name__ == "__main__":
     m = sqlite3.connect(mdb)
     m.executescript(
         """
-        CREATE TABLE mastery(device_id TEXT, concept_id TEXT, score REAL, ease REAL,
+        CREATE TABLE mastery(user_id TEXT, concept_id TEXT, score REAL, ease REAL,
             interval REAL, reps INTEGER, last_reviewed REAL,
-            PRIMARY KEY(device_id, concept_id));
-        CREATE TABLE notes(id TEXT PRIMARY KEY, device_id TEXT, text TEXT,
+            PRIMARY KEY(user_id, concept_id));
+        CREATE TABLE notes(id TEXT PRIMARY KEY, user_id TEXT, text TEXT,
             source TEXT, concept_id TEXT, created_at REAL);
         """
     )
