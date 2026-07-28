@@ -155,7 +155,10 @@
   .wikilink { padding: 6px 10px; font-size: 12px; letter-spacing: normal; text-transform: none; font-weight: 500; gap: 6px; color: var(--on); background: var(--canvas-soft); border-color: var(--hairline); }
   .wikilink:hover { background: rgba(255,255,255,.08); border-color: var(--on-mute); }
   .wikilink .rel { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: var(--ink-faint); }
-  .understood { width: 100%; margin-top: 16px; padding: 11px 14px; font-size: 12px; }
+  .askbtn { width: 100%; margin-top: 16px; padding: 11px 14px; font-size: 12px;
+            background: var(--on); color: var(--canvas); border-color: var(--on); }
+  .askbtn:hover { background: #d9dbe1; }
+  .understood { width: 100%; margin-top: 8px; padding: 11px 14px; font-size: 12px; }
   .understood.on { background: var(--on); color: var(--canvas); border-color: var(--on); }
   .understood.on:hover { background: #d9dbe1; }
   #graphlabel { position: absolute; top: 12px; left: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--on-mute); background: rgba(22,24,28,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 6px 10px; border: 1px solid var(--hairline); border-radius: var(--radius-sm); }
@@ -933,9 +936,28 @@ function showQuizResults(res){
   });
 }
 
+// 개념 하나를 "지금 물어볼 질문"으로 만든다. 세 군데(다음에 공부할 개념 / 퀴즈 오답
+// 복습 / 그래프 노드 패널)가 전부 이걸 쓴다.
+//
+// 전에는 focusConcept() + q.value 대입만 했다. 그런데 입력창은 대화 탭에서만 보이고
+// (showTab이 #f를 display:none으로 감춘다), 그래프는 1500px 미만에서 숨은 탭이다.
+// 그래서 학습 탭에서 "다음에 공부할 개념"을 눌러도 화면에서 바뀌는 게 없었고,
+// 퀴즈 오답의 "복습"은 빈 대화 화면으로 떨어뜨렸다 (benchmark-gap G15·G16).
+function askAboutConcept(conceptId, label){
+  const name = (label || (NODE_BY_ID[conceptId] || {}).label || conceptId || '').split(' /')[0];
+  navigate('chat', getConv() || '');          // 입력창이 보이는 곳으로 먼저 데려간다
+  const q = document.getElementById('q');
+  q.value = `${name}에 대해 설명해줘`;
+  if(cy && conceptId) focusConcept(conceptId); // 그래프가 보이는 폭이면 노드도 같이 비춘다
+  // navigate()는 hashchange -> applyRoute로 이어지고 그 사이에 포커스가 날아간다.
+  // 렌더가 끝난 다음 틱에 잡아야 커서가 실제로 입력창에 남는다.
+  setTimeout(() => { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 0);
+  toast(`“${name}” 질문을 입력창에 넣었어요 — 전송을 누르세요`);
+}
+
 function review(conceptId){
   closeQuiz();
-  focusConcept(conceptId);
+  askAboutConcept(conceptId);
 }
 
 // ---- Concept graph (Obsidian-style growing map) ----
@@ -1038,6 +1060,10 @@ function showPanel(d){
     `<p>${esc(d.summary||'')}</p>`+
     (links?`<div class="wiki-sec"><strong>관련 개념</strong><div class="wikilinks">${links}</div></div>`:'')+
     (src?`<div class="src"><strong>출처</strong>${src}</div>`:'')+
+    // 노드에서 바로 질문으로 (인벤토리 #44). 이게 없어서 그래프는 보기만 하는 그림이었다.
+    `<button type="button" class="askbtn" data-cid="${esc(d.id)}" onclick="askAboutConcept(this.dataset.cid)">`+
+      `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`+
+      `<span>이 개념 질문하기</span></button>`+
     `<button type="button" class="understood${known?' on':''}" data-cid="${esc(d.id)}" onclick="markKnown(this)">`+
       `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`+
       `<span>${known?'이해 완료':'이해했어요'}</span></button>`;
@@ -1180,10 +1206,7 @@ function renderNextUp(items){
   items.forEach(it => {
     const el = document.createElement('div'); el.className='nu-item';
     el.innerHTML = `<strong>${esc(it.label||'')}</strong>` + (it.reason ? `<span>${esc(it.reason)}</span>` : '');
-    el.onclick = () => {
-      focusConcept(it.concept_id);
-      document.getElementById('q').value = `${it.label}에 대해 설명해줘`;
-    };
+    el.onclick = () => askAboutConcept(it.concept_id, it.label);
     box.appendChild(el);
   });
 }
