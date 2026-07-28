@@ -56,10 +56,12 @@ def test_uploads_are_private_to_their_owner():
     import json
     import app
 
-    backup = corpus._CORPUS.read_bytes()
+    # 레지스트리가 SQLite로 옮겨간 뒤로는 테스트 행을 트랜잭션으로 되돌린다.
+    # (예전엔 corpus.json 바이트를 백업/복원했다)
+    added = []
     try:
-        corpus.add_pdf("uploads/userA/a.pdf", "A's private paper", owner="userA")
-        corpus.add_pdf("uploads/userB/b.pdf", "B's private paper", owner="userB")
+        added += [corpus.add_pdf("uploads/userA/a.pdf", "A's private paper", owner="userA")["id"],
+                  corpus.add_pdf("uploads/userB/b.pdf", "B's private paper", owner="userB")["id"]]
         a_titles = [e["title"] for e in corpus.visible_corpus("userA")]
         b_titles = [e["title"] for e in corpus.visible_corpus("userB")]
         assert "A's private paper" in a_titles and "B's private paper" not in a_titles
@@ -81,8 +83,11 @@ def test_uploads_are_private_to_their_owner():
         assert mixed == ["A's private paper"], mixed
         print(f"isolation ok: A sees {len(a_titles)}, B sees {len(b_titles)}")
     finally:
-        corpus._CORPUS.write_bytes(backup)  # never leave test rows in the real registry
-        json.loads(corpus._CORPUS.read_text())
+        db = corpus.connect()               # never leave test rows in the real registry
+        with db:
+            for sid in added:
+                db.execute("DELETE FROM sources WHERE id = ?", (sid,))
+        assert "A's private paper" not in {e["title"] for e in corpus.load_corpus()}
 
 
 def test_source_page_and_suggestions():
