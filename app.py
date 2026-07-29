@@ -82,6 +82,18 @@ async def lifespan(app: FastAPI):
     if missing:
         print(f"⚠ 시드 논문 {len(missing)}편이 없어요 — `python fetch_papers.py`로 받아주세요")
         obs.log_line(event="seed_papers_missing", count=len(missing), paths=missing[:3])
+    # 개발 기본값 그대로 외부에 띄우면 곤란한 것들. 막지는 않는다(로컬 데모가 목적이라
+    # 매번 토큰을 요구하면 쓰기 어렵다) — 대신 무엇이 열려 있는지 기동할 때마다 말한다.
+    insecure = []
+    if not settings.ADMIN_TOKEN:
+        insecure.append("ADMIN_TOKEN 미설정 → /analytics 가 인증 없이 열려 있음")
+    if "insecure" in settings.APP_SECRET:
+        insecure.append("APP_SECRET 기본값 → 계정 토큰을 위조할 수 있음")
+    if insecure:
+        print("⚠ 외부 공개 전 확인:")
+        for line in insecure:
+            print(f"   - {line}")
+        obs.log_line(event="insecure_defaults", items=insecure)
     yield
 
 
