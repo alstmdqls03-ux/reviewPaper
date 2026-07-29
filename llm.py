@@ -156,6 +156,20 @@ def _nodes():
     return corpus.graph_data()["nodes"]
 
 
+def _clip(text: str, n: int) -> str:
+    """n자 근처에서 자르되 단어를 쪼개지 않는다.
+
+    예전엔 [:40]이라 보기가 "…ground truth for training; th"처럼 단어 중간에서
+    끊겼다. 데모 화면에서 제일 먼저 눈에 띄는 자리다.
+    """
+    t = " ".join((text or "").split())
+    if len(t) <= n:
+        return t
+    cut = t[:n]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > n // 2 else cut).rstrip(" ,;.") + "…"
+
+
 async def _mock_stream(messages: list):
     """Deterministic mock answer that name-drops real graph concepts so the graph
     lights up and the quiz gate opens — good enough to demo the full flow offline."""
@@ -254,7 +268,7 @@ def _mock_quiz(concept_infos: list) -> list:
             "question": f"[데모 문제] '{label}'에 대한 다음 설명 중 리뷰 논문의 내용과 가장 부합하는 것은?",
             "options": [
                 f"{label}은(는) 리뷰 논문에서 다루지 않는다",
-                f"{label}은(는) {c.get('summary','핵심 개념')[:40]}",
+                f"{label}은(는) {_clip(c.get('summary','핵심 개념'), 60)}",
                 f"{label}은(는) 전자현미경과 무관하다",
                 f"{label}은(는) 오직 광학현미경에만 적용된다",
             ],
@@ -299,6 +313,16 @@ if __name__ == "__main__":
         assert text and cites, "mock stream should yield text + a citation"
         quiz = await make_quiz([], _nodes()[:4])
         assert len(quiz) == 4 and all("answer_index" in q for q in quiz)
+        # 보기가 단어 중간에서 끊기지 않는다 (데모에서 제일 먼저 보이는 자리)
+        for q in quiz:
+            opt = q["options"][q["answer_index"]]
+            assert not opt.endswith(" "), opt
+            if opt.endswith("…"):
+                assert not opt[:-1].rstrip().endswith((",", ";")), opt
+        assert _clip("abc", 10) == "abc"
+        assert _clip("Human-made ground truth for training; the main bottleneck", 40) \
+            == "Human-made ground truth for training…", _clip("Human-made ground truth for training; the main bottleneck", 40)
+        assert _clip("aaaaaaaaaaaaaaaaaaaaaaaaaaaa bb", 10) == "aaaaaaaaaa…"  # 공백이 너무 앞이면 그냥 자른다
         v = judge("q", text, cites)
         assert 1 <= v["faithfulness"] <= 5
         # friendly_error: 상태코드별 문구와 Retry-After 반영
