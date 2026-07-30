@@ -170,6 +170,44 @@ def _clip(text: str, n: int) -> str:
     return (cut[:sp] if sp > n // 2 else cut).rstrip(" ,;.") + "…"
 
 
+def _mock_quote(title: str, page: int, keyword: str) -> str:
+    """인용이 가리키는 **그 쪽에 실제로 있는** 문장을 돌려준다.
+
+    예전엔 "...Segmentation is discussed across the corpus..."를 지어냈다. 그 문장은
+    원문에 없으니 뷰어가 매번 "인용 구절을 이 쪽에서 그대로 찾지 못했어요"를 띄웠다 —
+    데모를 볼 때마다 제일 먼저 눈에 들어오는 문구가 실패 메시지였다.
+
+    이제 추출된 쪽 텍스트에서 문장을 골라 온다. 목이라 '이 문장이 답의 근거'라는
+    보장은 없지만, 최소한 **그 쪽에 있는 말**이고 뷰어 강조가 실제로 동작한다.
+    """
+    try:
+        import corpus
+        entry = next((e for e in corpus.load_corpus() if e["title"] == title), None)
+        if not entry:
+            return f"...{keyword}..."
+        pages = corpus.extract_pages(entry["path"])
+        if not pages:
+            return f"...{keyword}..."
+        text = " ".join(pages[min(max(page, 1), len(pages)) - 1][1].split())
+        # 문장 단위로 자르고, 키워드가 든 문장을 우선 (없으면 가장 실한 문장)
+        import re as _re
+        cand = [x.strip() for x in _re.split(r"(?<=[.!?])\s+", text) if 60 <= len(x.strip()) <= 300]
+        # 그림 범례·표 조각을 걸러낸다 ("N - Nucleus, NE - Nuclear Envelope, ...").
+        # 문장처럼 보이는 것만: 낱말 8개 이상 + 글자 비율 높음.
+        def prose(x):
+            letters = sum(ch.isalpha() or ch.isspace() for ch in x)
+            return (len(x.split()) >= 8 and letters / len(x) >= 0.88
+                    and x.count(" - ") <= 2)      # "N - Nucleus, NE - ..." 같은 범례 배제
+        sents = [x for x in cand if prose(x)] or cand
+        if not sents:
+            return text[:160] or f"...{keyword}..."
+        low = keyword.lower()
+        hit = next((x for x in sents if low in x.lower()), None)
+        return hit or max(sents, key=len)
+    except Exception:  # noqa: BLE001 — 목 인용이 앱을 멈추게 하면 안 된다
+        return f"...{keyword}..."
+
+
 async def _mock_stream(messages: list):
     """Deterministic mock answer that name-drops real graph concepts so the graph
     lights up and the quiz gate opens — good enough to demo the full flow offline."""
@@ -212,10 +250,10 @@ async def _mock_stream(messages: list):
         f"실제 답변은 API 키를 넣으면 원문 페이지 인용과 함께 생성됩니다."
     )
     def _cite(n, page):
+        title = (picked[min(n, len(picked) - 1)].get("sources") or ["Review paper"])[0]
         return ("citation", {
-            "title": (picked[min(n, len(picked) - 1)].get("sources") or ["Review paper"])[0],
-            "start_page": page, "end_page": page,
-            "cited_text": f"...{labels[min(n, len(labels) - 1)]} is discussed across the corpus...",
+            "title": title, "start_page": page, "end_page": page,
+            "cited_text": _mock_quote(title, page, labels[min(n, len(labels) - 1)]),
         })
 
     # 실제 인용은 문장 중간중간에 도착한다. 예전 목은 본문을 다 흘린 뒤 끝에 1건만
@@ -311,6 +349,19 @@ if __name__ == "__main__":
         text = "".join(t for k, t in chunks if k == "text")
         cites = [c for k, c in chunks if k == "citation"]
         assert text and cites, "mock stream should yield text + a citation"
+        # 목 인용은 그 쪽에 **실제로 있는** 문장이어야 한다 (뷰어 강조가 동작하려면)
+        import corpus as _c
+        checked = 0
+        for cc in cites:
+            e = next((x for x in _c.load_corpus() if x["title"] == cc["title"]), None)
+            if not e:
+                continue
+            pgs = _c.extract_pages(e["path"])
+            body = " ".join(pgs[min(cc["start_page"], len(pgs)) - 1][1].split())
+            q = " ".join((cc["cited_text"] or "").split())
+            assert q and q in body, f"인용 구절이 {cc['start_page']}쪽에 없다: {q[:60]!r}"
+            checked += 1
+        assert checked, "인용을 하나도 대조하지 못했다 — 검사가 헛돌았다"
         quiz = await make_quiz([], _nodes()[:4])
         assert len(quiz) == 4 and all("answer_index" in q for q in quiz)
         # 보기가 단어 중간에서 끊기지 않는다 (데모에서 제일 먼저 보이는 자리)
