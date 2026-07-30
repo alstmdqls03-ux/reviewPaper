@@ -12,3 +12,9 @@ file_cache.json
 corpus.json
 .env
 node_modules
+
+# 로컬에만 있는 문서(계약·제안서). git에서 빌드하면 애초에 없지만, 로컬 빌드에서는
+# 컨텍스트에 15MB가 딸려 들어간다 — 이미지에 들어갈 이유가 전혀 없다.
+docs/contract/
+docs/*.pdf
+docs/*.html

@@ -42,6 +42,7 @@ MOCK_LLM=1 python app.py            # http://localhost:8000
 | [DB 스키마](docs/db-schema.md) | `corpus.json` → SQLite 이관. JSON은 40스레드 동시 등록에서 11/40만 살아남고 파일이 깨졌다 |
 | [1년 로드맵](docs/roadmap-1y.md) | 분기별 계획, 비용 공식, **정직한 실패 경계 6개** |
 | [멀티페이지 UI 설계](docs/2026-07-24-multipage-uiux-design.md) | 왜 진짜 페이지 전환을 쓰지 않았나 (라이브 그래프·스트림 파괴) |
+| [데모 배포](docs/deploy-demo.md) | 키 없이 도는 공개 데모를 올리는 법 (`render.yaml` / `fly.toml`) |
 
 ## 핵심 기능
 

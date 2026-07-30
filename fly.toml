@@ -1,0 +1,39 @@
+# Fly.io — Render 대신 쓸 때. 잠들었다 깨는 방식이라 유휴 비용이 거의 없다.
+#
+#   fly launch --no-deploy --copy-config      # 앱 이름·리전만 정하고 이 파일을 쓴다
+#   fly secrets set APP_SECRET=$(openssl rand -hex 32) ADMIN_TOKEN=$(openssl rand -hex 16)
+#   fly deploy
+#
+# 기본값을 그대로 두면 계정 토큰을 위조할 수 있고 /analytics가 열린다. 그래서
+# 시크릿 2개는 deploy 전에 반드시 넣는다 (기동 로그가 빠졌다고 경고한다).
+app = "reviewpaper-demo"
+primary_region = "nrt"
+
+[build]
+
+[env]
+  MOCK_LLM = "1"        # 키 없이 전 기능 구동
+  PORT = "8000"
+  MAX_UPLOAD_MB = "10"  # 공개 데모는 아무나 올릴 수 있다 — 한도를 낮춘다
+  MAX_SOURCES = "3"
+  RATE_LIMIT = "15"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"     # 무활동이면 멈춘다 (첫 요청에 콜드 스타트)
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+# 세션·레이트리밋 상태가 프로세스 안에 있어 워커가 하나여야 한다 (db-schema.md §5).
+# 그래서 스케일아웃 대신 머신 하나를 쓴다.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

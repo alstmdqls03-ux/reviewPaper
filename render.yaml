@@ -1,0 +1,30 @@
+# Render Blueprint — 키 없이 도는 공개 데모 (MOCK 모드).
+# 저장소를 연결하고 Blueprint로 배포하면 이 파일대로 뜬다.
+#
+# 무료 플랜은 15분 무활동이면 잠들고, 다음 요청에서 콜드 스타트가 30초 넘게 걸린다.
+# 데모 링크를 공유할 때 그 점을 적어 두는 편이 낫다.
+services:
+  - type: web
+    name: reviewpaper-demo
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      # 키 없이 전 기능이 도는 모드. 실키를 넣을 생각이면 여기를 0으로 두고
+      # ANTHROPIC_API_KEY를 대시보드 시크릿으로 넣는다 (파일에 적지 않는다).
+      - key: MOCK_LLM
+        value: "1"
+      # 기본값을 그대로 쓰면 계정 토큰을 위조할 수 있고 /analytics가 열린다.
+      # Render가 배포 때 임의 값을 생성해 주므로 사람이 만들 필요가 없다.
+      - key: APP_SECRET
+        generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      # 공개 데모는 아무나 PDF를 올릴 수 있다. 무료 티어의 디스크는 재시작마다
+      # 날아가지만 그동안의 용량·시간은 실제로 쓰인다 — 한도를 낮춰 둔다.
+      - key: MAX_UPLOAD_MB
+        value: "10"
+      - key: MAX_SOURCES
+        value: "3"
+      - key: RATE_LIMIT
+        value: "15"
