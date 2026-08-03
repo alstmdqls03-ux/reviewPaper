@@ -1,12 +1,16 @@
 """각주 위치 복원: 스트리밍 때 붙은 자리에 재개 후에도 그대로 붙는가.
 
-`python test_citations.py` 또는 `pytest -q`. MOCK 전용 — 키도 네트워크도 필요 없다.
+`python tests/test_citations.py` 또는 `pytest -q`. MOCK 전용 — 키도 네트워크도 필요 없다.
 
 이전 동작: messages.meta에 citations를 저장하면서 "몇 번째 글자에 붙었는지"는
 저장하지 않아, 대화를 다시 열면 각주가 전부 답변 끝에 [1][2][3]으로 뭉쳤다.
 """
 import asyncio
 import os
+import sys
+
+# 직접 실행용 — tests/ 에서 루트 모듈을 찾게 한다. pytest는 pyproject의 pythonpath가 처리한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("MOCK_LLM", "1")
 

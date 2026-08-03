@@ -1,6 +1,10 @@
-"""Runnable check: graph.json is well-formed and papers exist. `python test_graph.py`"""
+"""Runnable check: graph.json is well-formed and papers exist. `python tests/test_graph.py`"""
 import json
 import os
+import sys
+
+# 직접 실행용 — tests/ 에서 루트 모듈을 찾게 한다. pytest는 pyproject의 pythonpath가 처리한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def test_graph():

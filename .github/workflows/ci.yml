@@ -26,7 +26,7 @@ jobs:
         run: python obs.py
 
       - name: Unit tests
-        run: pytest -q --ignore=test_injection.py
+        run: pytest -q --ignore=tests/test_injection.py
 
       - name: Start MOCK server
         run: |
@@ -47,7 +47,7 @@ jobs:
         run: python eval_gold.py
 
       - name: Injection / safety tests
-        run: pytest -q test_injection.py
+        run: pytest -q tests/test_injection.py
 
       - name: Stop server
         if: always()

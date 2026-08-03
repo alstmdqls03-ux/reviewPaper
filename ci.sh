@@ -17,7 +17,7 @@ echo "using: $PY ($($PY --version 2>&1))"
 
 echo "== unit tests (obs self-check + pytest) =="
 "$PY" obs.py
-"$PY" -m pytest -q --ignore=test_injection.py
+"$PY" -m pytest -q --ignore=tests/test_injection.py
 
 echo "== start MOCK server =="
 "$PY" app.py &
@@ -40,6 +40,6 @@ echo "== gold-set eval (gate) =="
 "$PY" eval_gold.py
 
 echo "== injection / safety tests =="
-"$PY" -m pytest -q test_injection.py
+"$PY" -m pytest -q tests/test_injection.py
 
 echo "== ci.sh: all green =="

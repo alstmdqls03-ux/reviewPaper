@@ -38,7 +38,7 @@ MOCK_LLM=1 python app.py            # http://localhost:8000
 | 문서 | 무엇이 적혀 있나 |
 |---|---|
 | [회고 v1–v5](docs/retrospective-v1-v5.md) | 내 코드를 남의 코드로 보고 쓴 회고. MOCK으로만 검증한 경로 7개, **사람 눈으로 본 적 없던 화면 4개**를 실측과 함께 |
-| [벤치마크 갭 분석](docs/benchmark-gap.md) | NotebookLM과 비교한 **자기 결함 21건**. 증거 링크와 재현 여부(✅ 재현 / 📄 코드만) 표시 |
+| [벤치마크 갭 분석](docs/benchmark-gap.md) | NotebookLM과 비교한 **자기 결함 21건** → **19건 해소**(커밋 해시 표시), 남은 2건은 실키 없이 판정 불가 |
 | [DB 스키마](docs/db-schema.md) | `corpus.json` → SQLite 이관. JSON은 40스레드 동시 등록에서 11/40만 살아남고 파일이 깨졌다 |
 | [1년 로드맵](docs/roadmap-1y.md) | 분기별 계획, 비용 공식, **정직한 실패 경계 6개** |
 | [멀티페이지 UI 설계](docs/2026-07-24-multipage-uiux-design.md) | 왜 진짜 페이지 전환을 쓰지 않았나 (라이브 그래프·스트림 파괴) |
@@ -111,7 +111,7 @@ locust -f locustfile.py --host http://127.0.0.1:8000 --headless -u 20 -r 10 -t 2
 ```
 app.py            FastAPI — 위 엔드포인트, 레이트리밋+관측 미들웨어, lifespan 코퍼스 업로드
 session.py        인메모리 세션(라이브 멀티턴)·TTL·세션락·개념매칭
-mastery.py        디바이스별 숙련도·간격반복·가이드경로·노트 (SQLite mastery.db)
+mastery.py        디바이스별 숙련도·간격반복·가이드경로·노트 (SQLite app.db)
 accounts.py       익명 계정·디바이스 매핑·서명 토큰 (SQLite app.db)
 history.py        영속·재개 가능한 대화/메시지 (SQLite app.db)
 corpus.py         코퍼스 레지스트리·PDF 추출·BM25 하이브리드 문서선택·그래프 재생성
@@ -121,8 +121,10 @@ obs.py            구조화 로깅·메트릭·비용추정   analytics.py  학�
 papers.py         Files API 업로드/캐시   generate_graph.py  그래프 생성
 static/index.html 채팅·퀴즈·숙련도·노트·업로드·계정·대화기록·분석 UI + Cytoscape 그래프
 eval.py / eval_gold.py   평가 하네스 / 골드셋 게이트
-locustfile.py     동시성·세션격리 부하   test_*.py  pytest
+locustfile.py     동시성·세션격리 부하
+tests/            pytest 6개 (인용위치·실패경로·그래프·세션·소스격리·인젝션)
 Dockerfile / docker-compose.yml / Makefile / ci.sh / .github/workflows/ci.yml
+pyproject.toml    pytest 설정만 (testpaths·pythonpath). 패키징 메타데이터 없음
 papers/           시드 논문 (저장소에 없음 — fetch_papers.py로 받는다)
 papers/papers.json  arXiv ID·라이선스·체크섬  papers/SOURCES.md  배경
 ```
@@ -139,8 +141,14 @@ papers/papers.json  arXiv ID·라이선스·체크섬  papers/SOURCES.md  배경
 
 ## 남은 작업 (실제 키/외부 의존)
 
-- [ ] 실제 답변 **원문 인용 품질** 확인, 업로드 논문 기반 그래프 재생성
-- [ ] `eval_gold.py` keyword/충실도 임계 상향, 회귀 추적 / injection 실모델 탈옥테스트(현재 MOCK skip)
-- [ ] BM25 하이브리드를 6편+ 실제 코퍼스로 리콜 측정, locust 실부하(실 LLM 지연·비용) p95
-- [ ] 프로덕션 시크릿: `APP_SECRET`·`ADMIN_TOKEN` 설정, 멀티워커 시 Redis 세션/레이트리밋
-- [ ] 실제 계정 로그인(매직링크 SMTP)·클라우드 배포 호스팅
+[이슈](https://github.com/alstmdqls03-ux/reviewPaper/issues)로 관리한다. 전부 **실키나 외부 인프라 없이는 판정할 수 없는 것**이고, 그래서 MOCK만으로는 닫히지 않는다.
+
+| # | 무엇 |
+|---|---|
+| [#1](https://github.com/alstmdqls03-ux/reviewPaper/issues/1) | G5 — "보낸 소스"와 "실제로 인용한 소스"가 아직 같은 것으로 표시된다 |
+| [#2](https://github.com/alstmdqls03-ux/reviewPaper/issues/2) | G21 — "소스에 답이 없다"는 상태가 화면에 존재하지 않는다 |
+| [#3](https://github.com/alstmdqls03-ux/reviewPaper/issues/3) | 실키 원문 인용 품질 확인, 업로드 논문 기반 그래프 재생성 |
+| [#4](https://github.com/alstmdqls03-ux/reviewPaper/issues/4) | `eval_gold.py` 임계 상향·회귀 추적, 인젝션 실모델 탈옥 테스트 |
+| [#5](https://github.com/alstmdqls03-ux/reviewPaper/issues/5) | BM25 리콜 측정, 실 LLM 부하 p95 |
+| [#6](https://github.com/alstmdqls03-ux/reviewPaper/issues/6) | 멀티워커 전환 — 인메모리 세션·레이트리밋을 공유 스토어로 |
+| [#7](https://github.com/alstmdqls03-ux/reviewPaper/issues/7) | 실제 계정 로그인(매직링크 SMTP), 클라우드 배포 호스팅 |

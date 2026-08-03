@@ -8,11 +8,15 @@
   3. 부분 답변          — 예전엔 기록에 안 남아, 새로고침하면 통째로 사라졌다.
                           토큰 비용은 이미 나간 뒤다 (300쪽을 읽힌 답일 수 있다)
 
-`python test_errors.py` 또는 `pytest -q`. MOCK-safe — 키도 네트워크도 안 쓴다.
+`python tests/test_errors.py` 또는 `pytest -q`. MOCK-safe — 키도 네트워크도 안 쓴다.
 """
 import asyncio
 import json
 import os
+import sys
+
+# 직접 실행용 — tests/ 에서 루트 모듈을 찾게 한다. pytest는 pyproject의 pythonpath가 처리한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("MOCK_LLM", "1")
 

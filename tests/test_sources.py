@@ -1,8 +1,12 @@
 """Source selection: ids are stable, and a selection narrows what the model reads.
 
-`python test_sources.py` or `pytest -q`. MOCK-safe — no key, no network.
+`python tests/test_sources.py` or `pytest -q`. MOCK-safe — no key, no network.
 """
 import os
+import sys
+
+# 직접 실행용 — tests/ 에서 루트 모듈을 찾게 한다. pytest는 pyproject의 pythonpath가 처리한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 os.environ.setdefault("MOCK_LLM", "1")
 

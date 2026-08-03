@@ -1,0 +1,7 @@
+# pytest 설정만 담는다. 패키징 메타데이터는 없다 — 이 저장소는 배포되는
+# 라이브러리가 아니라 `python app.py`로 도는 앱이다.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 앱 모듈은 루트에 평면 배치돼 있고 tests/는 그것을 import 한다.
+# 루트를 sys.path에 넣어주는 게 전부다 (conftest.py 한 개 더 두는 것보다 짧다).
+pythonpath = ["."]
