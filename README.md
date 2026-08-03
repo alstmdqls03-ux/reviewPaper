@@ -1,5 +1,7 @@
 # 리뷰 논문 학습 챗봇
 
+[![CI](https://github.com/alstmdqls03-ux/reviewPaper/actions/workflows/ci.yml/badge.svg)](https://github.com/alstmdqls03-ux/reviewPaper/actions/workflows/ci.yml)
+
 **논문에 질문하면 근거가 붙고, 각주를 누르면 그 쪽 원문이 열린다. 공부한 개념만 지도에서 자란다.**
 
 전자현미경 리뷰 논문 9편을 컨텍스트에 넣고, 문장별 인용으로 답하는 학습 도구.
